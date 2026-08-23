@@ -268,6 +268,13 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             failed.add(k)              # do not call this watch "asked"
             return
         completed[k] = completed.get(k, 0) + 1
+        pair = task[1]
+        # Record the outcome for THIS pair, found or not. An empty answer is
+        # the only thing that can retire a remembered price for a source that
+        # does not sweep its whole calendar every night.
+        dbm.record_pair_probe(conn, r.holiday_id, r.origin, r.destination,
+                              pair[0].isoformat(), pair[1].isoformat(),
+                              "google_flights", night, bool(offers))
         if not offers:
             return
         dbm.upsert_offers(conn, r.holiday_id, offers, seats, role="discovery",

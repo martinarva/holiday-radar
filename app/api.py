@@ -69,6 +69,8 @@ def _best_payload(cfg: Config, h, row: dict | None) -> dict | None:
         "logistics_eur": costs["logistics_eur"],
         "layover_hotel_eur": costs["layover_hotel_eur"],
         "origin_hotel_eur": costs["origin_hotel_eur"],
+        # a EUR 180 total is two nights; without this the reader cannot tell
+        "origin_hotel_nights": costs["origin_hotel_nights"],
         "effective_eur": costs["effective_eur"],
         "adult_eur": row["price_adult_eur"],
         # carried over from an earlier night, so callers can label it
@@ -223,6 +225,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 "effective_eur": costs["effective_eur"],
                 "layover_hotel_eur": costs["layover_hotel_eur"],
                 "origin_hotel_eur": costs["origin_hotel_eur"],
+                "origin_hotel_nights": costs["origin_hotel_nights"],
                 "max_layover_h": opp._col(r, "max_layover_h"),
                 "layover_label": opp._col(r, "layover_label"),
                 "school_days": sd_b + sd_a, "school_before": sd_b,

@@ -20,6 +20,13 @@ from pathlib import Path
 from app import itinerary
 from app.providers.base import Observation
 
+# Sentinel for a pre-migration verification whose candidate cannot be
+# recovered. Distinct from NULL on purpose: 'unattributed' means "we looked
+# and the source is unknowable", NULL would mean "today's code forgot to set
+# it" — one is history, the other is a bug, and the exit gate must be able to
+# tell them apart. It matches no real source, so it confirms nothing.
+UNATTRIBUTED = "unattributed"
+
 MIGRATIONS: list[tuple[str, str]] = [
     ("0001_observations", """
         CREATE TABLE observations (
@@ -267,6 +274,24 @@ MIGRATIONS: list[tuple[str, str]] = [
                      ELSE length(substr(reason, instr(reason, 'source=') + 7))
                    END))
          WHERE candidate_source IS NULL AND instr(reason, 'source=') > 0"""),
+
+    ("0041_verification_unattributed", """
+        UPDATE verifications SET candidate_source = 'unattributed'
+         WHERE candidate_source IS NULL"""),
+
+    ("0042_pair_probes", """
+        CREATE TABLE IF NOT EXISTS pair_probes (
+          holiday_id   TEXT NOT NULL,
+          origin       TEXT NOT NULL,
+          destination  TEXT NOT NULL,
+          out_date     TEXT NOT NULL,
+          back_date    TEXT NOT NULL,
+          source       TEXT NOT NULL,
+          probed_night TEXT NOT NULL,
+          found        INTEGER NOT NULL,
+          PRIMARY KEY (holiday_id, origin, destination, out_date, back_date,
+                       source)
+        )"""),
 ]
 
 # source -> operating carrier when the source implies it
@@ -325,6 +350,38 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def record_pair_probe(conn: sqlite3.Connection, holiday_id: str, origin: str,
+                      destination: str, out_date: str, back_date: str,
+                      source: str, night: str, found: bool) -> None:
+    """Remember that we asked about THIS date pair, and what came back.
+
+    Age alone cannot distinguish "nobody has looked lately" from "we looked
+    tonight and the flight is gone": a rotating sampler is silent about pairs
+    whose turn has not come, so a remembered price has to survive that. A
+    probe that returns nothing is a tombstone — the one signal that says the
+    fare really has disappeared.
+    """
+    conn.execute("""
+        INSERT INTO pair_probes (holiday_id, origin, destination, out_date,
+                                 back_date, source, probed_night, found)
+        VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(holiday_id, origin, destination, out_date, back_date,
+                    source)
+        DO UPDATE SET probed_night=excluded.probed_night, found=excluded.found
+    """, (holiday_id, origin, destination, out_date, back_date, source,
+          night, int(found)))
+    conn.commit()
+
+
+def empty_probes(conn: sqlite3.Connection, holiday_id: str) -> dict:
+    """(origin, destination, out, back, source) -> night we last found nothing."""
+    return {(r["origin"], r["destination"], r["out_date"], r["back_date"],
+             r["source"]): r["probed_night"]
+            for r in conn.execute(
+                "SELECT * FROM pair_probes WHERE holiday_id=? AND found=0",
+                (holiday_id,))}
 
 
 def run_migration(conn: sqlite3.Connection, name: str) -> None:

@@ -671,3 +671,42 @@ def test_hotel_risk_counts_every_unpriced_night(cfg):
     assert opp._hotel_risk(hel, both_unknown) == hel.hotel_eur * 2
     assert opp._hotel_risk(hel, one_known) == hel.hotel_eur
     assert opp._hotel_risk(hel, both_known) == 0.0
+
+
+def test_a_tombstone_retires_a_price_a_ttl_would_still_carry(cfg, tmp_path):
+    """Asking again and getting nothing is stronger evidence than age.
+
+    In throttle mode a Google price is carried for a whole rotation, because
+    silence usually means "not this pair's turn". But once the pair HAS been
+    re-queried and came back empty, the flight is gone — waiting out 48 more
+    nights keeps a dead fare on the board.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    throttled = load_config(ROOT / "config.yaml")
+    throttled.sampler["pairs_per_watch"] = 1
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+    dbm.upsert_observations(conn, h.id, [Observation(
+        origin="TLL", destination="AGP", out_date=out, back_date=back,
+        price_adult_eur=200.0, source="google_flights",
+        estimated_family_eur=800.0, is_direct=True)], seats=4,
+        night="2026-07-29")
+
+    # 25 nights old, well inside the rotation TTL: still shown
+    rows = opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=throttled)
+    assert len(rows) == 1 and rows[0]["_from_night"] == "2026-07-29"
+
+    # now we asked again tonight and Google had nothing
+    dbm.record_pair_probe(conn, h.id, "TLL", "AGP", out.isoformat(),
+                          back.isoformat(), "google_flights", "2026-08-23",
+                          found=False)
+    assert opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=throttled) == []
+
+
+def test_only_discovery_rows_inherit_the_rotations_patience(cfg):
+    """An audit is a one-off re-quote; it is never coming round again."""
+    throttled = load_config(ROOT / "config.yaml")
+    throttled.sampler["pairs_per_watch"] = 1
+    assert opp._ttl(throttled, "google_flights", "discovery") > 30
+    assert opp._ttl(throttled, "google_flights", "audit") == 3
+    assert opp._ttl(throttled, "google_flights", "verification") == 3

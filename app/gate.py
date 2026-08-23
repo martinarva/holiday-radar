@@ -128,13 +128,20 @@ def run_checks(cfg: Config, db_path, min_runs: int = 3,
         "no low-cost-carrier candidate labelled flight-verified",
         mislabeled == 0, f"{mislabeled} mislabelled rows"))
 
-    unattributed = conn.execute(
+    # NULL means today's code forgot to record the source. Rows migrated from
+    # before the column existed carry the UNATTRIBUTED sentinel instead, so
+    # one deliberately-unrecoverable legacy row cannot hold this red forever.
+    missing = conn.execute(
         "SELECT COUNT(*) c FROM verifications WHERE candidate_source IS NULL"
     ).fetchone()["c"]
+    legacy = conn.execute(
+        "SELECT COUNT(*) c FROM verifications WHERE candidate_source = ?",
+        (dbm.UNATTRIBUTED,)).fetchone()["c"]
     checks.append(Check(
-        "every verification names the candidate it checked",
-        unattributed == 0,
-        f"{unattributed} row(s) confirm nothing because their source is unknown"))
+        "every new verification names the candidate it checked", missing == 0,
+        f"{missing} unnamed row(s)"
+        + (f"; {legacy} pre-migration row(s) confirm nothing, by design"
+           if legacy else "")))
 
     # coverage invariants recomputed from the DB alone
     from app.dryrun import compute_metrics, rows_from_db

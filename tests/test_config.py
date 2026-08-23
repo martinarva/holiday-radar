@@ -101,3 +101,36 @@ def test_an_early_out_and_a_late_return_are_two_hotel_nights():
     # the boolean stays true wherever a room is needed at all
     assert hel.hotel_needed(out_early, back_late) is True
     assert hel.hotel_needed(out_late, back_early) is False
+
+
+def test_a_cli_override_reaches_the_read_model_too():
+    """The staleness policy is derived from cfg.sampler, not from the call.
+
+    With pairs_per_watch 0 in the file and 1 on the command line, the run
+    stored a partial rotation and the read model then aged it as a full-grid
+    snapshot, deleting half of what had just been collected.
+    """
+    import argparse
+
+    from app.cli import cmd_nightly
+
+    cfg = load_config(ROOT / "config.yaml")
+    cfg.sampler["pairs_per_watch"] = 0
+    args = argparse.Namespace(db="data/radar.db", google_budget=None,
+                              audit_budget=None, verify_budget=None,
+                              pairs_per_watch=1, workers=None)
+    seen = {}
+
+    def fake_run(cfg_, _db, **kw):
+        seen.update(kw)
+        return {"night": "x"}
+
+    import app.scheduler as sched
+    real, sched.run_nightly = sched.run_nightly, fake_run
+    try:
+        cmd_nightly(cfg, args)
+    finally:
+        sched.run_nightly = real
+    assert seen["pairs_per_watch"] == 1
+    assert cfg.sampler["pairs_per_watch"] == 1, \
+        "the read model must see the same mode the run used"

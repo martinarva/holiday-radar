@@ -491,3 +491,58 @@ def test_the_gate_judges_a_verification_by_its_own_candidate(cfg, tmp_path):
     conn.close()
     named = {c.name: c for c in run_checks(cfg, conn_path)}
     assert not named[key].ok, "Google cannot flight-verify a Wizz fare"
+
+
+def test_one_unrecoverable_legacy_row_does_not_hold_the_gate_red(cfg, tmp_path):
+    """We deliberately leave an unattributable check unattributed.
+
+    Requiring zero NULLs then failed the gate forever over a row the
+    migration was right not to guess at. NULL now means today's code forgot;
+    the sentinel means history we cannot recover.
+    """
+    from app.gate import run_checks
+
+    conn_path = tmp_path / "g.db"
+    conn = dbm.init_db(conn_path)
+    dbm.insert_verification(
+        conn, holiday_id="autumn-2026", origin="TLL", destination="AGP",
+        out_date="2026-10-26", back_date="2026-11-01", price_total_eur=767.0,
+        airlines="[]", legs="[]", level="flight-verified",
+        reason="indicative family 767 <= 1.25 x notify",
+        indicative_family_eur=767.0, night="2026-08-23")
+    conn.execute("UPDATE verifications SET candidate_source = NULL")
+    conn.commit()
+    dbm.run_migration(conn, "0041_verification_unattributed")
+    conn.close()
+
+    named = {c.name: c for c in run_checks(cfg, conn_path)}
+    key = "every new verification names the candidate it checked"
+    assert named[key].ok, "a migrated legacy row is not a code fault"
+    assert "by design" in named[key].detail
+
+    # ...but a row today's code failed to attribute IS a fault
+    conn = dbm.init_db(conn_path)
+    conn.execute("UPDATE verifications SET candidate_source = NULL")
+    conn.commit()
+    conn.close()
+    named = {c.name: c for c in run_checks(cfg, conn_path)}
+    assert not named[key].ok
+
+
+def test_an_empty_google_answer_leaves_a_tombstone(cfg, tmp_path):
+    """The sampler must record that a pair was asked about and found empty."""
+    conn_path = tmp_path / "t.db"
+
+    def nothing(*_a, **_k):
+        return []
+
+    run_nightly(cfg, conn_path, google_budget=1, audit_budget=0,
+                verify_budget=0, pairs_per_watch=1, workers=1,
+                log=lambda *_: None, google_search=nothing, sleep_s=0,
+                collect=_fake_collect(cfg, n_blind=1, n_covered=0, dormant=0),
+                rng=random.Random(1))
+    conn = dbm.init_db(conn_path)
+    probes = list(conn.execute("SELECT * FROM pair_probes"))
+    assert len(probes) == 1
+    assert probes[0]["found"] == 0
+    assert probes[0]["source"] == "google_flights"

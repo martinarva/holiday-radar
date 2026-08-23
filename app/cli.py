@@ -215,17 +215,25 @@ def cmd_nightly(cfg: Config, args) -> None:
     """E2-B: one nightly opportunity-scheduler cycle."""
     from app.scheduler import run_nightly
     s = cfg.sampler
+    # Write overrides BACK into cfg.sampler, not just into the call. The read
+    # model derives its staleness policy from cfg.sampler["pairs_per_watch"]
+    # — with 0 in the file and 1 on the command line, the run stored a
+    # partial rotation and the UI then aged it as if it were a full-grid
+    # snapshot, deleting half of what had just been collected.
+    for key, val in (("google_budget", args.google_budget),
+                     ("audit_budget", args.audit_budget),
+                     ("verify_budget", args.verify_budget),
+                     ("pairs_per_watch", args.pairs_per_watch),
+                     ("workers", args.workers)):
+        if val is not None:
+            s[key] = val
     summary = run_nightly(
         cfg, cfg.base_dir / args.db,
-        google_budget=args.google_budget if args.google_budget is not None
-        else s["google_budget"],
-        audit_budget=args.audit_budget if args.audit_budget is not None
-        else s["audit_budget"],
-        verify_budget=args.verify_budget if args.verify_budget is not None
-        else s["verify_budget"],
-        pairs_per_watch=args.pairs_per_watch if args.pairs_per_watch is not None
-        else s.get("pairs_per_watch", 0),
-        workers=args.workers if args.workers is not None else s.get("workers", 6),
+        google_budget=s["google_budget"],
+        audit_budget=s["audit_budget"],
+        verify_budget=s["verify_budget"],
+        pairs_per_watch=s.get("pairs_per_watch", 0),
+        workers=s.get("workers", 6),
         google_pace_s=s.get("pace_seconds", 0))
     print("\n=== NIGHTLY SUMMARY ===")
     for k, v in summary.items():

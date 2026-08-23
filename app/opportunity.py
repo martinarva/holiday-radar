@@ -283,19 +283,30 @@ def latest_priced_rows(conn, holiday_id: str, night: str | None,
     sql = sql.format(
         dst_inner="AND destination=?" if destination else "",
         dst_outer="AND o.destination=?" if destination else "")
+    # A tombstone beats any TTL: if we asked about this exact pair later than
+    # we last priced it and nothing came back, the flight is gone — no need
+    # to wait out a rotation before saying so.
+    gone = dbm.empty_probes(conn, holiday_id)
     rows = []
     for r in conn.execute(sql, params):
         row = dict(r)
         row["_from_night"] = (None if r["observed_night"] == night
                               else r["observed_night"])
-        if (row["_from_night"]
-                and _nights_apart(row["_from_night"], night) >= _ttl(cfg, r["source"])):
-            continue        # nobody has seen this fare in days; let it go
+        if not row["_from_night"]:
+            rows.append(row)
+            continue
+        probed = gone.get((r["origin"], r["destination"], r["out_date"],
+                           r["back_date"], r["source"]))
+        if probed and probed > r["observed_night"]:
+            continue        # asked again, found nothing: retire it
+        if _nights_apart(row["_from_night"], night) >= _ttl(
+                cfg, r["source"], _col(r, "observation_role")):
+            continue        # nobody has looked in long enough to give up
         rows.append(row)
     return rows
 
 
-def _ttl(cfg: Config | None, source: str) -> float:
+def _ttl(cfg: Config | None, source: str, role: str | None = None) -> float:
     """How many nights a price may be carried, by what its source means.
 
     A snapshot carrier (airBaltic, Ryanair, Wizz) hands back its whole
@@ -311,6 +322,11 @@ def _ttl(cfg: Config | None, source: str) -> float:
     """
     prefs = (cfg.preferences or {}) if cfg else {}
     if source in SNAPSHOT_SOURCES:
+        return float(prefs.get("stale_after_nights", 3))
+    # Only DISCOVERY rotates. An audit or verification row is a one-off
+    # re-quote of a pair that interested us, so it is never coming round
+    # again and must not inherit the rotation's patience.
+    if role and role != "discovery":
         return float(prefs.get("stale_after_nights", 3))
     sampler = (cfg.sampler or {}) if cfg else {}
     per_night = int(sampler.get("pairs_per_watch") or 0)
