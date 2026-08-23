@@ -114,7 +114,10 @@ def classify(rule: ClimateRule, t_max: float | None, rain_days: float | None,
     the module docstring."""
     if t_max is None:
         return EXCLUDED, 0.0
+    # distance below the minimum OR above the family-comfort maximum
     dt = max(0.0, (rule.min_day_max_c or 0) - t_max)
+    if rule.max_day_max_c is not None:
+        dt = max(dt, max(0.0, t_max - rule.max_day_max_c))
     dr = max(0.0, (rain_days or 0) - rule.max_rain_days) if rule.max_rain_days is not None else 0.0
     if rule.min_sea_c is not None:
         if sea_c is None:

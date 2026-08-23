@@ -37,3 +37,14 @@ def test_watchlist_product_and_mid_month():
     assert len(watches) == len(cfg.active_holidays()) * len(cfg.origins) * len(cfg.destinations)
     assert holiday_mid_month(cfg.holiday("christmas-2026")) == 12
     assert holiday_mid_month(cfg.holiday("autumn-2026")) == 10
+
+
+def test_upper_temperature_bound_protects_family_comfort():
+    """No upper bound gave Bangkok in April (~35 °C) a perfect score."""
+    hot = ClimateRule(min_day_max_c=17, max_day_max_c=31, max_rain_days=9,
+                      tolerance_c=2, tolerance_rain_days=2)
+    assert classify(hot, 24.0, 5.0, None)[0] == ELIGIBLE
+    assert classify(hot, 32.5, 5.0, None)[0] == MARGINAL     # 1.5 over, within tol
+    assert classify(hot, 35.0, 5.0, None)[0] == EXCLUDED     # 4 over
+    # and the score degrades rather than staying pinned at 10
+    assert classify(hot, 35.0, 5.0, None)[1] < classify(hot, 24.0, 5.0, None)[1]

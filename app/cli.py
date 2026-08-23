@@ -214,10 +214,16 @@ def cmd_coverage_report(cfg: Config, args) -> None:
 def cmd_nightly(cfg: Config, args) -> None:
     """E2-B: one nightly opportunity-scheduler cycle."""
     from app.scheduler import run_nightly
-    summary = run_nightly(cfg, cfg.base_dir / args.db,
-                          google_budget=args.google_budget,
-                          audit_budget=args.audit_budget,
-                          verify_budget=args.verify_budget)
+    s = cfg.sampler
+    summary = run_nightly(
+        cfg, cfg.base_dir / args.db,
+        google_budget=args.google_budget if args.google_budget is not None
+        else s["google_budget"],
+        audit_budget=args.audit_budget if args.audit_budget is not None
+        else s["audit_budget"],
+        verify_budget=args.verify_budget if args.verify_budget is not None
+        else s["verify_budget"],
+        google_pace_s=s.get("pace_seconds", 6))
     print("\n=== NIGHTLY SUMMARY ===")
     for k, v in summary.items():
         print(f"  {k}: {v}")
@@ -272,9 +278,10 @@ def main(argv: list[str] | None = None) -> None:
     pn = sub.add_parser("nightly",
                         help="E2-B: one nightly cycle (carriers + sampler + verify)")
     pn.add_argument("--db", default="data/radar.db")
-    pn.add_argument("--google-budget", type=int, default=30)
-    pn.add_argument("--audit-budget", type=int, default=2)
-    pn.add_argument("--verify-budget", type=int, default=5)
+    pn.add_argument("--google-budget", type=int, default=None,
+                    help="override config sampler.google_budget")
+    pn.add_argument("--audit-budget", type=int, default=None)
+    pn.add_argument("--verify-budget", type=int, default=None)
 
     psv = sub.add_parser("serve", help="dev UI + JSON API (reads DB only)")
     psv.add_argument("--port", type=int, default=8765)

@@ -1,222 +1,584 @@
 <!doctype html>
-<!-- Dev UI, intentionally throwaway: no framework, no build step. The real
-     investment is the JSON API this page consumes (/api/*). -->
+<!-- Holiday-Radar UI v1 — implements docs/UX-SPEC.md.
+     Recommendation-first, destination-first (Opportunity = holiday x
+     destination). Vanilla + hash routing: no framework, no build step; the
+     durable contract is the JSON API this consumes. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>holiday-radar · dev</title>
+<title>Holiday Radar</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <style>
-  :root { --bg:#101613; --card:#18221e; --ink:#e4ece8; --mut:#8fa39b;
-          --line:#26332d; --acc:#3fbfa8; --warn:#e5a356; --bad:#e07b62; }
-  * { box-sizing:border-box }
-  body { margin:0; padding:24px; background:var(--bg); color:var(--ink);
-         font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
-  h1 { font-size:18px; margin:0 0 4px } h1 span{color:var(--acc)}
-  .sub { color:var(--mut); margin-bottom:18px }
-  .err { background:#3a201a; border:1px solid var(--bad); border-radius:6px;
-         padding:8px 12px; margin:10px 0; white-space:pre-wrap }
-  .hol { background:var(--card); border:1px solid var(--line); border-radius:8px;
-         margin:16px 0; padding:14px 16px }
-  .hol h2 { font-size:15px; margin:0 0 2px } .hol h2 b{color:var(--acc)}
-  .meta { color:var(--mut); font-size:12.5px; margin-bottom:10px }
-  .chips span { display:inline-block; background:#22302a; border-radius:99px;
-                padding:1px 9px; margin-right:6px; font-size:12px }
-  table { border-collapse:collapse; width:100%; margin-top:8px; font-size:13px }
-  th { text-align:left; color:var(--mut); font-weight:normal; padding:4px 8px;
-       border-bottom:1px solid var(--line); white-space:nowrap }
-  td { padding:4px 8px; border-bottom:1px solid var(--line); white-space:nowrap }
-  td.num { text-align:right; font-variant-numeric:tabular-nums }
-  .direct{color:var(--acc)} .stop{color:var(--warn)} .mut{color:var(--mut)}
-  .blind td{color:var(--mut)}
-  .fam { font-weight:bold }
-  .tag { font-size:11px; border:1px solid var(--line); border-radius:4px;
-         padding:0 5px; color:var(--mut) }
-  .wrap { overflow-x:auto }
-  h3.origin { font-size:13.5px; margin:14px 0 2px; border-top:1px dashed var(--line);
-              padding-top:10px } h3.origin b{color:var(--acc)}
-  .lnk { color:var(--acc); cursor:pointer; text-decoration:underline dotted }
-  tr.offers > td { background:#141d1a; padding:6px 10px 10px 26px }
-  table.sub { width:auto; min-width:60%; font-size:12.5px }
-  table.sub th { background:transparent; padding:3px 8px }
-  table.sub td { padding:3px 8px }
-  button { background:#22302a; color:var(--ink); border:1px solid var(--line);
-           border-radius:6px; padding:2px 10px; cursor:pointer; font:inherit;
-           font-size:12px }
+:root{
+  --bg:#0f1512; --surface:#151d19; --raise:#1b2521; --ink:#e8efeb; --mut:#93a8a0;
+  --line:#26332e; --acc:#3fbfa8; --good:#4ade80; --fair:#e5a356; --bad:#e07b62;
+  --info:#7ab8f5; --grey:#6b7a75;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.55 Inter,-apple-system,"Segoe UI",sans-serif;
+  -webkit-font-smoothing:antialiased}
+.num,.price{font-variant-numeric:tabular-nums}
+a{color:inherit;text-decoration:none}
+button{font:inherit}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px 72px}
+
+/* header */
+header{border-bottom:1px solid var(--line);background:var(--surface);
+  position:sticky;top:0;z-index:20}
+.hbar{max-width:1180px;margin:0 auto;padding:12px 20px;display:flex;
+  align-items:center;gap:22px;flex-wrap:wrap}
+.brand{font-weight:700;font-size:16px;letter-spacing:-.01em}
+.brand span{color:var(--acc)}
+nav{display:flex;gap:4px;margin-left:6px}
+nav a{padding:6px 12px;border-radius:8px;font-size:14px;color:var(--mut)}
+nav a:hover{background:var(--raise);color:var(--ink)}
+nav a.on{background:var(--raise);color:var(--ink);font-weight:600}
+.status{margin-left:auto;font-size:13px;color:var(--mut);display:flex;
+  align-items:center;gap:7px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--good);flex:none}
+.dot.warn{background:var(--fair)}
+
+/* generic */
+h1{font-size:26px;margin:26px 0 4px;letter-spacing:-.02em}
+h2{font-size:17px;margin:30px 0 12px;letter-spacing:-.01em}
+h3{font-size:15px;margin:0 0 8px}
+.sub{color:var(--mut);font-size:14px;margin:0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:16px 18px}
+.grid{display:grid;gap:14px}
+.g3{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.mut{color:var(--mut)}
+.tag{font-size:11.5px;border:1px solid var(--line);border-radius:5px;
+  padding:1px 6px;color:var(--mut);white-space:nowrap}
+.pill{font-size:12px;border-radius:999px;padding:2px 10px;font-weight:600}
+.pill.good{background:#14361f;color:var(--good)}
+.pill.fair{background:#3a2a15;color:var(--fair)}
+.pill.info{background:#152b3d;color:var(--info)}
+.pill.grey{background:#20272a;color:var(--grey)}
+.btn{background:var(--acc);color:#06231e;border:0;border-radius:9px;
+  padding:9px 16px;font-weight:600;cursor:pointer}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn:focus-visible,a:focus-visible,select:focus-visible{outline:2px solid var(--acc);
+  outline-offset:2px}
+.big{font-size:30px;font-weight:700;letter-spacing:-.02em}
+.mid{font-size:20px;font-weight:600}
+.small{font-size:13px}
+.empty{border:1px dashed var(--line);border-radius:12px;padding:22px;
+  color:var(--mut);font-size:14px}
+
+/* hero */
+.hero{background:linear-gradient(150deg,#17302a,#151d19 60%);
+  border:1px solid #24473f;border-radius:14px;padding:22px}
+.hero .kicker{font-size:12px;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--acc)}
+.facts{display:flex;gap:18px;flex-wrap:wrap;margin:14px 0 4px;font-size:14px}
+.bar{height:6px;background:var(--raise);border-radius:99px;overflow:hidden;
+  max-width:260px}
+.bar > i{display:block;height:100%;background:var(--acc)}
+
+/* tables */
+table{border-collapse:collapse;width:100%;font-size:14px}
+th{text-align:left;font-weight:500;color:var(--mut);font-size:12px;
+  text-transform:uppercase;letter-spacing:.05em;padding:6px 10px;
+  border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.n,th.n{text-align:right}
+.scroll{overflow-x:auto}
+.star{color:var(--acc)}
+
+/* opportunity rows */
+.opp{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:14px 16px;display:block;margin-bottom:10px}
+.opp:hover{border-color:#33463f}
+.opp .head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.opp .rank{color:var(--mut);font-size:13px;min-width:26px}
+.opp .name{font-size:17px;font-weight:600}
+.alt{font-size:13px;color:var(--mut);margin-top:6px}
+.matrix td{padding:5px 8px;text-align:right;font-size:13px}
+.matrix td.lbl{text-align:left;color:var(--mut)}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 18px;
+  position:sticky;top:53px;background:var(--bg);padding:10px 0;z-index:10}
+select{background:var(--raise);color:var(--ink);border:1px solid var(--line);
+  border-radius:8px;padding:7px 10px;font-size:13.5px}
+@media(max-width:640px){
+  .wrap{padding:0 14px 60px} h1{font-size:22px} .big{font-size:26px}
+  .filters{position:static}
+  td,th{padding:6px 7px}
+}
 </style>
 </head>
 <body>
-<h1>holiday-radar <span>· dev</span></h1>
-<div class="sub" id="health">loading…</div>
-<div id="errors"></div>
-<div id="verif"></div>
-<div id="holidays">loading…</div>
+<header><div class="hbar">
+  <div class="brand">✈ Holiday <span>Radar</span></div>
+  <nav>
+    <a href="#/" data-r="">Radar</a>
+    <a href="#/system" data-r="system">System</a>
+  </nav>
+  <div class="status" id="status"><span class="dot"></span><span>loading…</span></div>
+</div></header>
+<div class="wrap" id="view"><p class="sub" style="margin-top:28px">Loading latest radar snapshot…</p></div>
 
 <script>
-const fmtT = s => s ? s.replace("T"," ").slice(0,16)+"Z" : "–";
-const money = v => v == null ? "–" : Math.round(v) + " €";
+// <template> parses in a neutral context, so standalone <tr>/<td> survive
+// (a plain div would silently drop them).
+const $ = (h) => { const t=document.createElement("template"); t.innerHTML=h.trim(); return t.content.firstChild; };
+const eur = v => v==null ? "–" : "€" + Math.round(v).toLocaleString("en-US");
+const esc = s => String(s??"").replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+const j = async u => { const r = await fetch(u); if(!r.ok) throw new Error(u+" → "+r.status); return r.json(); };
+const ago = h => h==null ? "" : h < 1 ? "just now" : h < 24 ? `${Math.round(h)}h ago`
+  : `${Math.round(h/24)}d ago`;
+const dfmt = s => new Date(s+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"});
 
-async function j(url){ const r = await fetch(url); if(!r.ok) throw new Error(url+" → "+r.status); return r.json(); }
-
-function schoolTag(b){
-  if(!b.school_days) return `<span class="direct" title="fits fully inside the break">🏫 0</span>`;
-  const parts = [];
-  if(b.school_days_before) parts.push(`${b.school_days_before} before`);
-  if(b.school_days_after)  parts.push(`${b.school_days_after} after`);
-  return `<span class="stop" title="school days missed">🏫 ${parts.join(" · ")}</span>`;
+function scorePill(s){
+  if(s==null) return `<span class="pill grey">collecting</span>`;
+  const cls = s>=8 ? "good" : s>=6.5 ? "fair" : "grey";
+  const lbl = s>=8 ? "great match" : s>=6.5 ? "good match" : "fair";
+  return `<span class="pill ${cls}">${lbl} ${s.toFixed(1)}</span>`;
 }
-function bestCell(b){
-  if(!b) return `<td colspan="7" class="mut">no priced pair</td>`;
-  const d = b.is_direct ? `<span class="direct">direct</span>`
-                        : `<span class="stop">1-stop</span>`;
-  const eff = b.logistics_eur
-    ? `<td class="num fam" title="fare ${money(b.family_eur)} + logistics ${money(b.logistics_eur)}">${money(b.effective_eur)}</td>`
-    : `<td class="num fam">${money(b.effective_eur)}</td>`;
-  return `${eff}
-          <td class="num mut">${b.logistics_eur ? money(b.family_eur)+" + "+money(b.logistics_eur) : "–"}</td>
-          <td class="num">${money(b.adult_eur)}/ad</td>
-          <td>${b.out_date} → ${b.back_date} (${b.nights}n)</td>
-          <td>${d}</td>
-          <td>${schoolTag(b)}</td>
-          <td><span class="tag">${b.source}/${b.price_basis}</span></td>`;
+function schoolChip(o){
+  if(!o) return "";
+  if(!o.school_days) return `<span title="fits inside the break">✓ no school missed</span>`;
+  const parts=[]; if(o.school_before) parts.push(`${o.school_before} before`);
+  if(o.school_after) parts.push(`${o.school_after} after`);
+  return `<span title="school days missed">🏫 ${o.school_days} day${o.school_days>1?"s":""} (${parts.join(" · ")})</span>`;
 }
+function climChip(c){
+  if(!c || c.t_max_c==null) return `<span class="mut">climate n/a</span>`;
+  const bits = [`☀ ${Math.round(c.t_max_c)}°`];
+  if(c.sea_c!=null) bits.push(`🌊 ${Math.round(c.sea_c)}°`);
+  if(c.rain_days!=null) bits.push(`🌧 ${Math.round(c.rain_days)} d/mo`);
+  return `<span>${bits.join(" · ")}</span> <span class="mut">${esc(c.label||"")}</span>`;
+}
+function verifChip(level){
+  if(level==="flight-verified") return `<span class="pill info">✓ flight verified</span>`;
+  if(level==="market-context") return `<span class="pill info">market context</span>`;
+  return `<span class="pill grey">○ indicative</span>`;
+}
+function stops(o){ return o.is_direct ? `<span style="color:var(--good)">nonstop</span>`
+                                      : `<span style="color:var(--fair)">1+ stop</span>`; }
 
-async function load(){
-  const h = await j("/health");
-  const runs = await j("/api/runs?limit=5");
-  const lastErrs = (h.last_run && h.last_run.errors) || [];
-  const sm = (h.last_run && h.last_run.summary) || {};
-  const budgets = sm.discovery_used != null
-    ? ` · google: ${sm.discovery_used}/${sm.discovery_budget} discovery` +
-      ` (${sm.discovery_priced} priced, ${sm.floor_due} floor-due)` +
-      ` · ${sm.audit_used}/${sm.audit_budget} audit · ${sm.verify_rows} verified`
-    : "";
-  document.getElementById("health").textContent =
-    `data night: ${h.latest_night ?? "–"} · observations: ${h.observations_total}` +
-    ` · last run: ${h.last_run ? h.last_run.kind+" @ "+fmtT(h.last_run.finished_at) : "never"}` +
-    budgets +
-    ` · errors in last run: ${lastErrs.length}`;
-  if(lastErrs.length)
-    document.getElementById("errors").innerHTML =
-      `<div class="err">last run errors:\n${lastErrs.join("\n")}</div>`;
+/* ---------------- Radar home ---------------- */
+async function viewRadar(el){
+  const d = await j("/api/radar");
+  setStatus(d);
+  const fam = `Family ${d.family.adults}+${d.family.children} · ${d.origins.join(" + ")}`;
+  el.innerHTML = "";
+  el.append($(`<div><h1>Find our next school-holiday trip</h1>
+    <p class="sub">${fam} · snapshot ${d.night ?? "–"}</p></div>`));
 
-  // E2-B.5: exact family totals for candidates that beat the verify rule
-  const vs = await j("/api/verifications?limit=12");
-  if(vs.length){
-    const rows = vs.map(v => {
-      const d = v.delta_eur;
-      const dtxt = d == null ? "" :
-        `<span class="${d <= 0 ? 'direct' : 'stop'}">${d > 0 ? "+" : ""}${Math.round(d)} € vs indicative</span>`;
-      return `<tr>
-        <td>${v.holiday_id}</td>
-        <td>${v.origin}→${v.destination}</td>
-        <td>${v.out_date} → ${v.back_date}</td>
-        <td class="num fam">${v.price_total_eur == null ? "no result" : money(v.price_total_eur)}</td>
-        <td>${dtxt}</td>
-        <td class="mut">${v.airlines.join("+")}</td>
-        <td><span class="tag">${v.level}</span></td>
-      </tr>`;
-    }).join("");
-    document.getElementById("verif").innerHTML = `
-      <div class="hol"><h2><b>verified candidates</b> <span class="mut">— exact family totals (stage B)</span></h2>
-      <div class="wrap"><table>
-        <tr><th>holiday</th><th>watch</th><th>pair</th><th>family total</th>
-            <th></th><th>airlines</th><th>level</th></tr>
-        ${rows}</table></div></div>`;
-  }
-
-  const data = await j("/api/holidays");
-  window.__origins = data.origins;
-  const root = document.getElementById("holidays");
-  root.innerHTML = "";
-  for(const hol of data.holidays){
-    const c = hol.counts;
-    const div = document.createElement("div");
-    div.className = "hol";
-    div.innerHTML = `
-      <h2><b>${hol.id}</b> — ${hol.name} <span class="mut">${hol.start} … ${hol.end}</span></h2>
-      <div class="meta chips">
-        <span>direct ${c.covered_direct||0}</span>
-        <span>1-stop ${c.covered_1stop||0}</span>
-        <span>blind ${c.blind||0}</span>
-        <span>dormant ${c.dormant||0}</span>
-        ${hol.best ? `<span>best effective: <b>${money(hol.best.effective_eur)}</b> ${hol.best.origin}→${hol.best.destination}${hol.best.logistics_eur ? ` <span class="mut">(${money(hol.best.family_eur)} + ${money(hol.best.logistics_eur)} logistics)</span>` : ""}</span>` : ""}
+  if(d.hero && d.hero.best_option){
+    const h = d.hero, b = h.best_option, m = b.market || {};
+    const vs = m.vs_market_pct!=null ? `<div>↓ ${Math.abs(m.vs_market_pct)}% vs recent market</div>` : "";
+    el.append($(`<div class="hero" style="margin-top:18px">
+      <div class="row"><span class="kicker">Best right now</span>
+        <span class="tag">${esc(h.holiday.name)}</span>
+        <span style="margin-left:auto">${scorePill(h.recommendation_score)}</span></div>
+      <div style="margin-top:10px" class="row">
+        <div style="flex:1;min-width:220px">
+          <div class="mid">${esc(h.destination_name)}<span class="mut">, ${esc(h.country)}</span></div>
+          <div class="big price">${eur(b.effective_eur)}</div>
+          <div class="mut small">effective family cost${b.logistics_eur ?
+            ` — ${eur(b.flights_eur)} flights + ${eur(b.logistics_eur)} logistics` : ""}</div>
+        </div>
+        <div style="min-width:220px">
+          <div><b>${b.origin} → ${h.destination}</b> · ${stops(b)}</div>
+          <div class="mut">${dfmt(b.out_date)} → ${dfmt(b.back_date)} · ${b.nights} nights</div>
+          <div class="mut small">${(b.airlines||[]).join(" + ") || "airline n/a"}</div>
+        </div>
       </div>
-      <button data-h="${hol.id}">show watches</button>
-      <div class="wrap" id="t-${hol.id}"></div>`;
-    root.appendChild(div);
+      <div class="facts">${schoolChip(b)} ${climChip(h.climate)} ${verifChip(b.verification.level)}</div>
+      ${vs}
+      <div class="row" style="margin-top:14px">
+        <a class="btn" href="#/h/${h.holiday_id}/${h.destination}">View deal</a>
+        <button class="btn ghost" onclick="alert('Tracking arrives with E3 alerts.')">♡ Track this trip</button>
+      </div></div>`));
+  } else {
+    el.append($(`<div class="empty" style="margin-top:18px">Nothing unusually cheap yet —
+      the radar is still collecting prices. You'll see a deal here as soon as one appears.</div>`));
   }
-  // click a destination cell to expand every stored itinerary for that watch
-  root.addEventListener("click", async ev => {
-    const tr = ev.target?.closest?.("tr[data-offers]");
-    if(tr && ev.target.classList.contains("lnk")){
-      const nxt = tr.nextElementSibling;
-      if(nxt && nxt.classList.contains("offers")){ nxt.remove(); return; }
-      const [hid, og, dst] = tr.dataset.offers.split("|");
-      const offers = await j(`/api/offers?holiday=${hid}&origin=${og}&destination=${dst}`);
-      const row = document.createElement("tr");
-      row.className = "offers";
-      row.innerHTML = `<td colspan="11">${
-        offers.length ? `<table class="sub"><tr><th>#</th><th>price</th><th>/adult</th>
-          <th>airlines</th><th>routing</th><th>stops</th><th>pair</th><th>role</th></tr>` +
-          offers.map(o => `<tr>
-            <td class="mut">${o.rank + 1}</td>
-            <td class="num fam">${money(o.price_total_eur)}</td>
-            <td class="num mut">${money(o.price_adult_eur)}</td>
-            <td>${o.airlines.join(" + ") || "?"}</td>
-            <td class="mut">${o.legs.join("  ")}</td>
-            <td>${o.is_direct ? '<span class="direct">direct</span>'
-                              : `<span class="stop">${o.stops}</span>`}</td>
-            <td class="mut">${o.out_date}→${o.back_date}</td>
-            <td><span class="tag">${o.source}/${o.role}</span></td>
-          </tr>`).join("") + `</table>`
-        : `<span class="mut">no stored itineraries for this watch yet — carrier
-           calendars give one price per date pair; full airline breakdowns come
-           from Google queries</span>`}</td>`;
-      tr.after(row);
-      return;
+
+  el.append($(`<h2>Upcoming school holidays</h2>`));
+  const g = $(`<div class="grid g3"></div>`);
+  for(const h of d.holidays){
+    if(!h.on_sale){
+      g.append($(`<div class="card"><h3>${esc(h.name)}</h3>
+        <div class="mut small">${dfmt(h.start)} – ${dfmt(h.end)} · ${h.days_away} days away</div>
+        <div style="margin:14px 0 6px"><span class="pill grey">not on sale yet</span></div>
+        <div class="mut small">${h.dormant} destinations ready — the radar starts
+          automatically when schedules open.</div></div>`));
+      continue;
     }
-    const id = ev.target?.dataset?.h;
-    if(!id) return;
-    const box = document.getElementById("t-"+id);
-    if(box.innerHTML){ box.innerHTML=""; ev.target.textContent="show watches"; return; }
-    ev.target.textContent = "hide";
-    const w = await j(`/api/holidays/${id}/watches`);
-    // group by origin for a per-airport overview (TLL first, then HEL, RIX)
-    box.innerHTML = window.__origins.map(og => {
-      const rows = w.watches.filter(r => r.origin === og.code);
-      if(!rows.length) return "";
-      const priced = rows.filter(r => r.best);
-      const cheapest = priced.length
-        ? Math.min(...priced.map(r => r.best.effective_eur)) : null;
-      const hparts = [];
-      if(og.handicap_fixed_eur) hparts.push(`fixed ${og.handicap_fixed_eur} €`);
-      if(og.handicap_per_day_eur) hparts.push(`parking ${og.handicap_per_day_eur} €/day`);
-      if(og.hotel_eur) hparts.push(
-        `(+${og.hotel_eur} € hotel if dep &lt; ${og.hotel_if_departure_before || "?"} or arr &gt; ${og.hotel_if_arrival_after || "?"} — applied at verify)`);
-      const hcap = hparts.length
-        ? ` · logistics: ${hparts.join(" + ")} · ~+${og.extra_time_h} h` : "";
-      const body = rows.map(r => `
-        <tr class="${r.coverage_class==='blind'||r.coverage_class==='dormant'?'blind':''}"
-            data-offers="${id}|${r.origin}|${r.destination}">
-          <td><span class="lnk">${r.destination}</span></td>
-          <td class="mut">${r.destination_name}</td>
-          <td>${r.status} ${r.score} <span class="tag">${r.rule}</span></td>
-          <td>${r.coverage_class.replace("covered_","")}</td>
-          ${bestCell(r.best)}
-        </tr>`).join("");
-      return `
-      <h3 class="origin"><b>${og.code}</b><span class="mut"> — ${og.note}${hcap}
-        · ${priced.length}/${rows.length} priced${cheapest ? ` · best effective ${money(cheapest)}` : ""}</span></h3>
-      <table>
-        <tr><th>dest</th><th></th><th>climate</th><th>coverage</th>
-            <th>effective</th><th>fare + logistics</th><th>adult</th>
-            <th>best pair</th><th></th><th>school</th><th>source</th></tr>
-        ${body}</table>`;
-    }).join("");
-  });
+    const b = h.best, bo = b && b.best_option;
+    const c = h.cheapest, co = c && c.cheapest_option;
+    const cheapBlock = (co && !h.cheapest_is_best)
+      ? `<div style="border-top:1px solid var(--line);margin-top:12px;padding-top:10px">
+           <div class="mut small">Cheapest overall</div>
+           <div class="row"><span class="mid price">${eur(co.effective_eur)}</span>
+             <span class="small">${esc(c.destination_name)}</span></div>
+           <div class="mut small">${co.origin} · ${co.is_direct?"direct":"1+ stop"} ·
+             ${co.school_days?("🏫 "+co.school_days):"✓ 0 school days"}</div></div>`
+      : (co ? `<div class="mut small" style="margin-top:10px">Also the cheapest option.</div>` : "");
+    g.append($(`<div class="card"><h3>${esc(h.name)}</h3>
+      <div class="mut small">${dfmt(h.start)} – ${dfmt(h.end)} · ${h.days_away} days away</div>
+      ${bo ? `<div class="mut small" style="margin-top:12px">Best match</div>
+        <div class="row"><span class="mid">${esc(b.destination_name)}</span>${scorePill(b.recommendation_score)}</div>
+        <div class="big price">${eur(bo.effective_eur)}</div>
+        <div class="mut small">${bo.origin} · ${bo.is_direct ? "direct" : "1+ stop"} ·
+          ${bo.nights} nights · ${bo.school_days ? "🏫 "+bo.school_days : "✓ 0 school days"}</div>
+        ${cheapBlock}`
+        : `<div class="empty" style="margin:12px 0">No prices yet — scanning has just started.</div>`}
+      <div class="mut small" style="margin-top:12px">${h.priced} priced ·
+        ${h.scanning} still scanning · coverage ${h.coverage_pct}%</div>
+      <div style="margin-top:12px"><a class="btn ghost" href="#/h/${h.id}">Explore →</a></div>
+    </div>`));
+  }
+  el.append(g);
+
+  el.append($(`<h2>Recent movers</h2>`));
+  if(!d.movers.length){
+    el.append($(`<div class="empty">No movement yet — price changes appear once the
+      radar has more than one night of history for a route.</div>`));
+  } else {
+    const t = $(`<div class="card scroll"><table><thead><tr><th>Route</th><th>Holiday</th>
+      <th class="n">Was</th><th class="n">Now</th><th class="n">Change</th></tr></thead>
+      <tbody></tbody></table></div>`);
+    const tb = t.querySelector("tbody");
+    for(const m of d.movers){
+      const up = m.delta_eur > 0;
+      tb.append($(`<tr><td>${m.origin}→${m.destination}</td><td class="mut">${m.holiday_id}</td>
+        <td class="n price mut">${eur(m.from_eur)}</td><td class="n price">${eur(m.to_eur)}</td>
+        <td class="n" style="color:${up?"var(--bad)":"var(--good)"}">${up?"↑":"↓"} ${Math.abs(m.delta_pct)}%</td></tr>`));
+    }
+    el.append(t);
+  }
 }
-load().catch(e => document.getElementById("health").textContent = "ERROR: "+e);
+
+/* ---------------- Holiday detail ---------------- */
+const FILTERS = {sort:"best", origin:"any", stops:"any", school:"any"};
+async function viewHoliday(el, hid){
+  const d = await j(`/api/holidays/${hid}/opportunities`);
+  const h = d.holiday;
+  el.innerHTML = "";
+  el.append($(`<div><p class="sub" style="margin-top:22px"><a href="#/">← Radar</a></p>
+    <h1>${esc(h.name)}</h1>
+    <p class="sub">${dfmt(h.start)} – ${dfmt(h.end)} · ${h.days_away} days away ·
+      <b>${h.priced} priced</b> · ${h.scanning} still scanning · coverage ${h.coverage_pct}%</p></div>`));
+
+  const f = $(`<div class="filters">
+    <select id="f-sort">
+      <option value="best">Best match</option>
+      <option value="deal">Best deal (market)</option>
+      <option value="cost">Lowest total cost</option>
+      <option value="weather">Best weather</option>
+      <option value="school">Fewest school days</option>
+    </select>
+    <select id="f-origin"><option value="any">Any origin</option>
+      ${["TLL","HEL","RIX"].map(o=>`<option value="${o}">${o} only</option>`).join("")}</select>
+    <select id="f-stops"><option value="any">Any connections</option>
+      <option value="direct">Direct only</option></select>
+    <select id="f-school"><option value="any">School: any</option>
+      <option value="0">0 days</option><option value="1">≤1 day</option>
+      <option value="2">≤2 days</option></select>
+  </div>`);
+  el.append(f);
+  const list = $(`<div></div>`);
+  el.append(list);
+
+  function render(){
+    const priced = d.opportunities.filter(o => o.state === "priced");
+    let rows = priced.map(o => {
+      let opts = o.origin_options;
+      if(FILTERS.origin !== "any") opts = opts.filter(x => x.origin === FILTERS.origin);
+      if(FILTERS.stops === "direct") opts = opts.filter(x => x.is_direct);
+      if(FILTERS.school !== "any") opts = opts.filter(x => x.school_days <= +FILTERS.school);
+      if(!opts.length) return null;
+      const best = FILTERS.sort === "cost"
+        ? opts.reduce((a,b)=> b.effective_eur < a.effective_eur ? b : a)
+        : opts.reduce((a,b)=> (b.score??0) > (a.score??0) ? b : a);
+      return {...o, _opts: opts, _best: best};
+    }).filter(Boolean);
+
+    const key = {
+      best: r => -(r._best.score ?? 0),
+      deal: r => -(r.market_score ?? -1),
+      cost: r => r._best.effective_eur,
+      weather: r => -(r.climate.score ?? 0),
+      school: r => r._best.school_days,
+    }[FILTERS.sort];
+    rows.sort((a,b)=> key(a)-key(b));
+
+    list.innerHTML = "";
+    if(!rows.length){
+      list.append($(`<div class="empty">No destination matches these filters yet.
+        ${priced.length ? "Try relaxing them — " + priced.length + " destinations are priced."
+        : "Scanning has just started; first results appear over the next few radar cycles."}</div>`));
+    }
+    rows.forEach((r,i)=>{
+      const b = r._best;
+      const alts = r._opts.filter(o => o !== b)
+        .map(o => `${o.origin} ${eur(o.effective_eur)} ${o.is_direct?"direct":"1+ stop"}
+          ${o.school_days? "🏫"+o.school_days : "✓0"}`).join(" · ");
+      const mk = r.market_score!=null
+        ? `<span class="mut small">market ${r.market_score.toFixed(1)}/10</span>` : "";
+      list.append($(`<a class="opp" href="#/h/${r.holiday_id}/${r.destination}">
+        <div class="head"><span class="rank">#${i+1}</span>
+          <span class="name">${esc(r.destination_name)}</span>
+          <span class="mut small">${esc(r.country)}</span>
+          <span style="margin-left:auto">${scorePill(r._best.score)}</span></div>
+        <div class="mut small" style="margin:4px 0 10px">${climChip(r.climate)}</div>
+        <div class="row">
+          <div style="min-width:150px"><span class="mid price">${eur(b.effective_eur)}</span>
+            <span class="mut small"> effective</span></div>
+          <div><b>${b.origin}</b> · ${stops(b)} · ${b.nights} nights ·
+            <span class="mut">${dfmt(b.out_date)}→${dfmt(b.back_date)}</span></div>
+          <div class="small">${schoolChip(b)}</div>
+          <div style="margin-left:auto" class="small">${verifChip(b.verification.level)} ${mk}</div>
+        </div>
+        ${alts ? `<div class="alt">Other origins: ${alts}</div>` : ""}
+      </a>`));
+    });
+    const scanning = d.opportunities.filter(o=>o.state==="scanning").length;
+    if(scanning) list.append($(`<p class="mut small" style="margin-top:14px">
+      🔎 ${scanning} more destinations are still being scanned — results improve each night.</p>`));
+  }
+  for(const k of ["sort","origin","stops","school"]){
+    const sel = f.querySelector("#f-"+k);
+    sel.value = FILTERS[k];
+    sel.onchange = () => { FILTERS[k] = sel.value; render(); };
+  }
+  render();
+}
+
+/* ---------------- Opportunity detail ---------------- */
+async function viewOpportunity(el, hid, dst){
+  const d = await j(`/api/opportunities/${hid}/${dst}`);
+  const o = d.opportunity, b = o.best_option;
+  el.innerHTML = "";
+  el.append($(`<div><p class="sub" style="margin-top:22px">
+      <a href="#/h/${hid}">← ${esc(d.holiday.name)}</a></p>
+    <h1>${esc(o.destination_name)}<span class="mut">, ${esc(o.country)}</span></h1>
+    <p class="sub">${climChip(o.climate)}</p></div>`));
+
+  if(!b){
+    el.append($(`<div class="empty" style="margin-top:16px">
+      ${o.state === "dormant" ? "Flights aren't on sale yet. We'll start automatically when schedules open."
+        : "No prices yet for this destination — it's queued for the sampler."}</div>`));
+    return;
+  }
+
+  const g = $(`<div class="grid g2" style="margin-top:16px"></div>`);
+  g.append($(`<div class="card">
+    <div class="kicker mut small" style="letter-spacing:.08em">RECOMMENDED</div>
+    <div class="mid" style="margin:6px 0">${b.origin} → ${o.destination}</div>
+    <div class="mut">${dfmt(b.out_date)} → ${dfmt(b.back_date)} · ${b.nights} nights · ${stops(b)}</div>
+    <div class="big price" style="margin-top:10px">${eur(b.effective_eur)}</div>
+    <div class="mut small">${b.logistics_eur ? `${eur(b.flights_eur)} flights + ${eur(b.logistics_eur)} ${b.origin} logistics`
+      : "no origin logistics"}${b.hotel_risk_eur ? ` · +${eur(b.hotel_risk_eur)} hotel if the flight is early/late` : ""}</div>
+    <div class="facts small">${schoolChip(b)} · ${(b.airlines||[]).join(" + ")||"airline n/a"}</div>
+    <div class="row" style="margin-top:12px">${verifChip(b.verification.level)}
+      <span class="mut small">source ${b.source} · updated ${ago(b.age_hours)}</span></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" onclick="alert('Live verification lands with E3.')">Check live price</button>
+      <button class="btn ghost" onclick="alert('Tracking arrives with E3 alerts.')">♡ Track</button>
+    </div></div>`));
+
+  const m = b.market || {};
+  g.append($(`<div class="card">
+    <div class="kicker mut small" style="letter-spacing:.08em">PRICE SIGNAL</div>
+    ${m.state === "ready" ? `
+      <table style="margin-top:8px"><tbody>
+        <tr><td>Current</td><td class="n price">${eur(b.effective_eur)}</td></tr>
+        <tr><td>Median (${m.nights} nights)</td><td class="n price mut">${eur(m.median_eur)}</td></tr>
+        <tr><td>Recent low</td><td class="n price mut">${eur(m.low_eur)}</td></tr>
+      </tbody></table>
+      <div style="margin-top:10px">${m.vs_market_pct<=0?"↓":"↑"} ${Math.abs(m.vs_market_pct)}% vs market</div>
+      <div class="bar" style="margin-top:8px"><i style="width:${(m.score||0)*10}%"></i></div>
+      <div class="mut small">market score ${m.score}/10 — how good this price is historically
+        (not the same as match score)</div>`
+    : `<div class="empty" style="margin-top:8px">Collecting history — a market score needs a
+        few nights of observations for this route. ${m.nights||0} so far.</div>`}
+  </div>`));
+  el.append(g);
+
+  el.append($(`<h2>How to get there</h2>`));
+  const t = $(`<div class="card scroll"><table><thead><tr><th>Origin</th><th class="n">Flights</th>
+    <th class="n">Logistics</th><th class="n">Effective</th><th>Trip</th><th>School</th>
+    <th>Airline</th><th>Why</th></tr></thead><tbody></tbody></table></div>`);
+  const tb = t.querySelector("tbody");
+  for(const opt of o.origin_options){
+    const rec = opt === b || opt.origin === b.origin;
+    tb.append($(`<tr>
+      <td>${rec?'<span class="star">★</span> ':""}<b>${opt.origin}</b></td>
+      <td class="n price">${eur(opt.flights_eur)}</td>
+      <td class="n price mut">${opt.logistics_eur?"+"+eur(opt.logistics_eur):"—"}</td>
+      <td class="n price"><b>${eur(opt.effective_eur)}</b></td>
+      <td>${opt.is_direct?"direct":"1+ stop"} · ${opt.nights}n</td>
+      <td>${opt.school_days?("🏫 "+opt.school_days):"✓ 0"}</td>
+      <td class="mut">${(opt.airlines||[]).join("+")||"–"}</td>
+      <td class="mut small">${(opt.reasons||[]).slice(0,2).map(r=>(r.good?"✓ ":"△ ")+esc(r.text)).join("<br>")}</td>
+    </tr>`));
+  }
+  el.append(t);
+
+  if(d.school_ladder.length > 1){
+    el.append($(`<h2>Price vs school days</h2>`));
+    const l = $(`<div class="card scroll"><table><thead><tr><th>School days</th><th>Dates</th>
+      <th>Origin</th><th class="n">Effective</th><th class="n">Difference</th></tr></thead>
+      <tbody></tbody></table></div>`);
+    const lb = l.querySelector("tbody");
+    for(const p of d.school_ladder){
+      const save = p.saving_vs_zero_eur;
+      lb.append($(`<tr><td>${p.school_days?("🏫 "+p.school_days):"✓ none"}</td>
+        <td>${dfmt(p.out_date)} → ${dfmt(p.back_date)} <span class="mut">(${p.nights}n)</span></td>
+        <td>${p.origin}</td><td class="n price">${eur(p.effective_eur)}</td>
+        <td class="n" style="color:${save>0?"var(--good)":"var(--mut)"}">${save>0?"save "+eur(save):"—"}</td></tr>`));
+    }
+    el.append(l);
+    el.append($(`<p class="mut small">The radar doesn't decide — it makes the trade-off visible.</p>`));
+  }
+
+  if(d.date_pairs.length > 1){
+    el.append($(`<h2>Date options</h2>`));
+    const byOrigin = {};
+    d.date_pairs.forEach(p => (byOrigin[p.origin] ||= []).push(p));
+    for(const [og, ps] of Object.entries(byOrigin)){
+      const outs = [...new Set(ps.map(p=>p.out_date))].sort();
+      const backs = [...new Set(ps.map(p=>p.back_date))].sort();
+      const cell = {};
+      ps.forEach(p => cell[p.out_date+"|"+p.back_date] = p);
+      const prices = ps.map(p=>p.effective_eur);
+      const lo = Math.min(...prices), hi = Math.max(...prices);
+      const mt = $(`<div class="card scroll" style="margin-bottom:12px">
+        <h3>${og} <span class="mut small">— depart (rows) × return (columns), effective family cost</span></h3>
+        <table class="matrix"><thead><tr><th></th>${backs.map(b=>`<th class="n">${dfmt(b)}</th>`).join("")}</tr></thead>
+        <tbody>${outs.map(o2=>`<tr><td class="lbl">${dfmt(o2)}</td>${backs.map(b2=>{
+          const p = cell[o2+"|"+b2];
+          if(!p) return `<td class="mut">·</td>`;
+          const rel = hi>lo ? (p.effective_eur-lo)/(hi-lo) : 0;
+          const col = rel<.34?"var(--good)":rel<.67?"var(--fair)":"var(--mut)";
+          return `<td style="color:${col}" title="${p.nights} nights, ${p.school_days} school days">
+            ${eur(p.effective_eur)}${p.school_days?`<br><span class="mut" style="font-size:11px">🏫${p.school_days}</span>`:""}</td>`;
+        }).join("")}</tr>`).join("")}</tbody></table></div>`);
+      el.append(mt);
+    }
+  }
+
+  if(d.offers.length){
+    el.append($(`<h2>All itineraries seen</h2>`));
+    const of = $(`<div class="card scroll"><table><thead><tr><th class="n">#</th><th class="n">Family</th>
+      <th>Airlines</th><th>Routing</th><th>Stops</th><th>Dates</th><th>From</th></tr></thead>
+      <tbody></tbody></table></div>`);
+    const ob = of.querySelector("tbody");
+    d.offers.slice(0,25).forEach((x,i)=>{
+      ob.append($(`<tr><td class="n mut">${i+1}</td><td class="n price">${eur(x.price_total_eur)}</td>
+        <td>${esc((x.airlines||[]).join(" + "))||"–"}</td>
+        <td class="mut small">${esc((x.legs||[]).join("  "))}</td>
+        <td>${x.is_direct?'<span style="color:var(--good)">nonstop</span>':x.stops}</td>
+        <td class="mut">${dfmt(x.out_date)}→${dfmt(x.back_date)}</td>
+        <td class="mut small">${x.origin} · ${x.source}</td></tr>`));
+    });
+    el.append(of);
+  }
+}
+
+/* ---------------- System ---------------- */
+async function viewSystem(el){
+  const [s, v] = await Promise.all([j("/api/system"), j("/api/verifications?limit=20")]);
+  el.innerHTML = "";
+  const lr = s.last_run || {};
+  el.append($(`<div><h1>System</h1><p class="sub">Diagnostics — everything the
+    normal screens deliberately hide.</p></div>`));
+  el.append($(`<div class="grid g3" style="margin-top:16px">
+    <div class="card"><h3>Last run</h3>
+      <table><tbody>
+      <tr><td>Night</td><td class="n">${s.night ?? "–"}</td></tr>
+      <tr><td>Discovery</td><td class="n">${lr.discovery_used ?? "–"}/${lr.discovery_budget ?? "–"}
+        (${lr.discovery_priced ?? 0} priced)</td></tr>
+      <tr><td>Audit</td><td class="n">${lr.audit_used ?? "–"}/${lr.audit_budget ?? "–"}</td></tr>
+      <tr><td>Verify rows</td><td class="n">${lr.verify_rows ?? "–"}</td></tr>
+      <tr><td>Floor due</td><td class="n">${lr.floor_due ?? "–"}</td></tr>
+      <tr><td>Errors</td><td class="n" style="color:${s.errors.length?"var(--bad)":"var(--good)"}">${s.errors.length}</td></tr>
+      </tbody></table></div>
+    <div class="card"><h3>Observations by source</h3>
+      <table><tbody>${Object.entries(s.observations_by_source)
+        .map(([k,c])=>`<tr><td>${k}</td><td class="n price">${c}</td></tr>`).join("")}</tbody></table></div>
+    <div class="card"><h3>Providers</h3>
+      <table><tbody>${s.providers.map(p=>`<tr><td>${p.name}</td>
+        <td class="mut small">${p.role}</td>
+        <td class="n"><span class="pill ${p.state==="healthy"?"good":p.state==="disabled"?"grey":"info"}">${p.state}</span></td></tr>`).join("")}</tbody></table></div>
+  </div>`));
+
+  el.append($(`<h2>Coverage per holiday</h2>`));
+  const c = $(`<div class="card scroll"><table><thead><tr><th>Holiday</th><th class="n">Direct</th>
+    <th class="n">1-stop</th><th class="n">Blind</th><th class="n">Dormant</th></tr></thead>
+    <tbody></tbody></table></div>`);
+  const cb = c.querySelector("tbody");
+  for(const [hid, m] of Object.entries(s.coverage)){
+    cb.append($(`<tr><td>${hid}</td><td class="n">${m.covered_direct||0}</td>
+      <td class="n">${m.covered_1stop||0}</td><td class="n">${m.blind||0}</td>
+      <td class="n mut">${m.dormant||0}</td></tr>`));
+  }
+  el.append(c);
+
+  if(v.length){
+    el.append($(`<h2>Verifications & market context</h2>`));
+    const t = $(`<div class="card scroll"><table><thead><tr><th>Watch</th><th>Dates</th>
+      <th class="n">Result</th><th>Meaning</th><th>Airlines</th><th>Level</th></tr></thead>
+      <tbody></tbody></table></div>`);
+    const tb = t.querySelector("tbody");
+    for(const x of v){
+      const meaning = x.level === "market-context"
+        ? `<span class="mut">carrier fare ${eur(x.carrier_fare_eur)} · alternative is
+           <b>${eur(x.saving_vs_alternative_eur)} more</b> — Google can't price Ryanair</span>`
+        : (x.delta_eur==null ? "" : `<span style="color:${x.delta_eur<=0?"var(--good)":"var(--fair)"}">
+           ${x.delta_eur>0?"+":""}${eur(x.delta_eur)} vs indicative</span>`);
+      tb.append($(`<tr><td>${x.origin}→${x.destination}</td>
+        <td class="mut">${dfmt(x.out_date)}→${dfmt(x.back_date)}</td>
+        <td class="n price">${eur(x.price_total_eur)}</td>
+        <td class="small">${meaning}</td>
+        <td class="mut small">${esc((x.airlines||[]).join("+"))}</td>
+        <td>${verifChip(x.level)}</td></tr>`));
+    }
+    el.append(t);
+  }
+
+  if(s.errors.length){
+    el.append($(`<h2>Errors in last run</h2>`));
+    el.append($(`<div class="card"><pre class="small mut" style="white-space:pre-wrap;margin:0">${
+      esc(s.errors.join("\n"))}</pre></div>`));
+  }
+}
+
+/* ---------------- router ---------------- */
+function setStatus(d){
+  const s = document.getElementById("status");
+  const healthy = d.health === "healthy";
+  s.innerHTML = `<span class="dot ${healthy?"":"warn"}"></span>
+    <span>${healthy ? "All systems healthy" : d.error_count+" issue(s) last run"} ·
+    scan ${d.updated_at ? new Date(d.updated_at).toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"numeric",month:"short"}) : "–"}</span>`;
+}
+async function route(){
+  const el = document.getElementById("view");
+  const parts = (location.hash.replace(/^#\/?/, "")).split("/").filter(Boolean);
+  document.querySelectorAll("nav a").forEach(a =>
+    a.classList.toggle("on", (a.dataset.r||"") === (parts[0]==="h" ? "" : (parts[0]||""))));
+  try{
+    if(parts[0] === "system") await viewSystem(el);
+    else if(parts[0] === "h" && parts[2]) await viewOpportunity(el, parts[1], parts[2]);
+    else if(parts[0] === "h") await viewHoliday(el, parts[1]);
+    else await viewRadar(el);
+    window.scrollTo(0,0);
+  }catch(e){
+    el.innerHTML = `<div class="empty" style="margin-top:24px">Couldn't load: ${esc(e.message)}</div>`;
+  }
+}
+addEventListener("hashchange", route);
+route();
 </script>
 </body>
 </html>

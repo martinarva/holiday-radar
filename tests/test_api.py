@@ -66,4 +66,4 @@ def test_watches_sorted_and_shaped(client):
 
 def test_index_serves_html(client):
     r = client.get("/")
-    assert r.status_code == 200 and "holiday-radar" in r.text
+    assert r.status_code == 200 and "Holiday Radar" in r.text

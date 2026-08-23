@@ -47,8 +47,11 @@ destinations:
 # tolerance band of a bound. Climate is a ranking signal — hard exclusion only
 # when strict: true.
 climate_rules:
-  beach:     {min_day_max_c: 23, min_sea_c: 21, max_rain_days: 8, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
-  warm_city: {min_day_max_c: 17, max_rain_days: 9, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
+  # max_day_max_c matters for a family with young children: Bangkok in April
+  # (~35 °C) scored a perfect 10 without an upper bound, which is wrong for a
+  # 6-year-old. Above the cap a destination degrades to marginal, then excluded.
+  beach:     {min_day_max_c: 23, max_day_max_c: 33, min_sea_c: 21, max_rain_days: 8, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
+  warm_city: {min_day_max_c: 17, max_day_max_c: 31, max_rain_days: 9, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
 
 # Family (2+2) round-trip totals, EUR, carry-on basis.
 tiers:
@@ -64,3 +67,18 @@ providers:
   verify_top_k: 3            # date-pair candidates sent to verify per watch
 
 scheduler: {timezone: Europe/Tallinn, screen_cron: "45 2 * * *", verify_top_n: 8}
+
+# Nightly Google sampler budgets. The carrier layer already refreshes
+# EVERYTHING every night (airBaltic returns whole date grids, Ryanair a whole
+# window per request), so only Google-covered destinations depend on this.
+# Owner decision 2026-08-23: a sweep that takes ~8 nights makes the data up to
+# a week stale, which defeats the point — so the discovery budget covers every
+# active blind watch each night (one date pair per watch; the pair rotates, so
+# the date grid still fills in over time). fast-flights is free; the real
+# constraint is politeness, handled by pace_seconds spreading the run over
+# hours rather than hammering.
+sampler:
+  google_budget: 260        # >= active blind watches (223 today, headroom)
+  audit_budget: 4           # carrier-covered re-checks -> carrier_vs_google_delta
+  verify_budget: 8          # candidates at <= 1.25x buy threshold
+  pace_seconds: 6           # gap between Google queries (~26 min per 260)

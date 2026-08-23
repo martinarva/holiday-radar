@@ -138,7 +138,69 @@ MIGRATIONS: list[tuple[str, str]] = [
     ("0013_offers_lookup", """
         CREATE INDEX ix_offers_watch ON offers
         (holiday_id, origin, destination, observed_night)"""),
+    # The operating carrier belongs on the observation itself, not only in
+    # the offers detail: for carrier sources it is known by construction, for
+    # Google it comes from the itinerary.
+    ("0014_observation_airlines", """
+        ALTER TABLE observations ADD COLUMN airlines TEXT"""),
+    # Flight times: required by the conditional-hotel rule (a departure before
+    # the ferry runs costs an extra night) and by departure-time filtering.
+    # Captured now because data we don't capture cannot be backfilled later.
+    ("0015_offer_times", """
+        ALTER TABLE offers ADD COLUMN first_departure TEXT"""),
+    ("0016_offer_arrival", """
+        ALTER TABLE offers ADD COLUMN last_arrival TEXT"""),
+    ("0017_offer_leg_details", """
+        ALTER TABLE offers ADD COLUMN leg_details TEXT"""),
+    # Reference data mirrored from config so the database is self-describing:
+    # the API, the coverage report and any future analysis can answer
+    # "what is AGP, and what is its October climate?" without the YAML.
+    ("0018_ref_destinations", """
+        CREATE TABLE destinations (
+            iata TEXT PRIMARY KEY,
+            name TEXT NOT NULL, country TEXT, tier TEXT,
+            tags TEXT, lat REAL, lon REAL, notes TEXT
+        )"""),
+    ("0019_ref_holidays", """
+        CREATE TABLE holidays (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL,
+            active INTEGER NOT NULL, duration_min INTEGER, duration_max INTEGER,
+            dep_from TEXT, dep_to TEXT, ret_from TEXT, ret_to TEXT
+        )"""),
+    ("0020_ref_climate", """
+        CREATE TABLE climate_normals (
+            iata TEXT NOT NULL, month INTEGER NOT NULL,
+            t_max_c REAL, rain_days REAL, sea_c REAL,
+            PRIMARY KEY (iata, month)
+        )"""),
+    # ♡ Track this trip (UX-SPEC §8) — the portable watch definition the user
+    # creates from an opportunity; alerts consume it in E3.
+    ("0021_tracked_trips", """
+        CREATE TABLE tracked_trips (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            holiday_id TEXT NOT NULL,
+            destination TEXT NOT NULL,
+            origins TEXT NOT NULL,
+            alert_rule TEXT NOT NULL,
+            threshold_eur REAL,
+            active INTEGER NOT NULL DEFAULT 1,
+            definition_yaml TEXT
+        )"""),
 ]
+
+# source -> operating carrier when the source implies it
+SOURCE_AIRLINE = {"ryanair": "Ryanair", "airbaltic": "airBaltic"}
+
+
+def airlines_of(o: Observation) -> list[str]:
+    """Best-known operating carrier(s) for an observation."""
+    raw_air = (o.raw or {}).get("airlines")
+    if raw_air:
+        return list(raw_air)
+    implied = SOURCE_AIRLINE.get(o.source)
+    return [implied] if implied else []
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
@@ -176,8 +238,9 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               (holiday_id, origin, destination, source, out_date, back_date,
                observed_night, observed_at, price_adult_eur, price_basis,
                source_price, estimated_family_eur, is_direct, confidence,
-               freshness_hours, days_to_departure, raw_json, observation_role)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               freshness_hours, days_to_departure, raw_json, observation_role,
+               airlines)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(holiday_id, origin, destination, source,
                         out_date, back_date, observed_night)
             DO UPDATE SET
@@ -191,7 +254,8 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               freshness_hours=excluded.freshness_hours,
               days_to_departure=excluded.days_to_departure,
               raw_json=excluded.raw_json,
-              observation_role=excluded.observation_role
+              observation_role=excluded.observation_role,
+              airlines=excluded.airlines
         """, (holiday_id, o.origin, o.destination, o.source,
               o.out_date.isoformat(), o.back_date.isoformat(),
               night, o.observed_at.isoformat(),
@@ -199,7 +263,8 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               o.family_estimate_eur(seats),
               None if o.is_direct is None else int(o.is_direct),
               o.confidence, o.freshness_hours, o.days_to_departure,
-              json.dumps(o.raw) if o.raw else None, role))
+              json.dumps(o.raw) if o.raw else None, role,
+              json.dumps(airlines_of(o))))
         n += 1
     conn.commit()
     return n
@@ -220,8 +285,8 @@ def upsert_offers(conn: sqlite3.Connection, holiday_id: str, offers,
               (holiday_id, origin, destination, out_date, back_date,
                observed_night, observed_at, source, observation_role,
                offer_rank, price_total_eur, price_adult_eur, airlines, legs,
-               stops, is_direct)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               stops, is_direct, first_departure, last_arrival, leg_details)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(holiday_id, origin, destination, out_date, back_date,
                         observed_night, source, offer_rank)
             DO UPDATE SET
@@ -230,13 +295,19 @@ def upsert_offers(conn: sqlite3.Connection, holiday_id: str, offers,
               price_total_eur=excluded.price_total_eur,
               price_adult_eur=excluded.price_adult_eur,
               airlines=excluded.airlines, legs=excluded.legs,
-              stops=excluded.stops, is_direct=excluded.is_direct
+              stops=excluded.stops, is_direct=excluded.is_direct,
+              first_departure=excluded.first_departure,
+              last_arrival=excluded.last_arrival,
+              leg_details=excluded.leg_details
         """, (holiday_id, o.origin, o.destination, o.out_date.isoformat(),
               o.back_date.isoformat(), night, now.isoformat(), o.source, role,
               rank, o.price_total_eur,
               round(o.price_total_eur / seats, 2) if seats else None,
               json.dumps(list(o.airlines)), json.dumps(legs),
-              max(0, len(legs) - 2), int(len(legs) <= 2)))
+              max(0, len(legs) - 2), int(len(legs) <= 2),
+              getattr(o, "first_departure", None),
+              getattr(o, "last_arrival", None),
+              json.dumps(list(getattr(o, "leg_details", ()) or []))))
         n += 1
     conn.commit()
     return n
@@ -258,6 +329,62 @@ def offers_for_watch(conn: sqlite3.Connection, holiday_id: str, origin: str,
         WHERE holiday_id=? AND origin=? AND destination=? AND observed_night=?
         ORDER BY price_total_eur LIMIT ?
     """, (holiday_id, origin, destination, night, limit)))
+
+
+def sync_reference(conn: sqlite3.Connection, cfg, climate_cache: dict | None = None
+                   ) -> None:
+    """Mirror config + climate cache into the DB so it is self-describing.
+    Idempotent; safe to call at the start of every run."""
+    conn.executemany("""
+        INSERT INTO destinations VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(iata) DO UPDATE SET name=excluded.name,
+          country=excluded.country, tier=excluded.tier, tags=excluded.tags,
+          lat=excluded.lat, lon=excluded.lon, notes=excluded.notes
+    """, [(d.iata, d.name, d.country, d.tier, json.dumps(list(d.tags)),
+           d.lat, d.lon, d.notes) for d in cfg.destinations])
+    conn.executemany("""
+        INSERT INTO holidays VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET name=excluded.name,
+          start_date=excluded.start_date, end_date=excluded.end_date,
+          active=excluded.active, duration_min=excluded.duration_min,
+          duration_max=excluded.duration_max, dep_from=excluded.dep_from,
+          dep_to=excluded.dep_to, ret_from=excluded.ret_from,
+          ret_to=excluded.ret_to
+    """, [(h.id, h.name, h.start.isoformat(), h.end.isoformat(),
+           int(h.active), h.duration_min, h.duration_max,
+           h.departure_window()[0].isoformat(), h.departure_window()[1].isoformat(),
+           h.return_window()[0].isoformat(), h.return_window()[1].isoformat())
+          for h in cfg.holidays])
+    if climate_cache:
+        rows = []
+        for iata, months in climate_cache.items():
+            for m, v in (months or {}).items():
+                rows.append((iata, int(m), v.get("t_max"), v.get("rain_days"),
+                             v.get("sea_c")))
+        conn.executemany("""
+            INSERT INTO climate_normals VALUES (?,?,?,?,?)
+            ON CONFLICT(iata, month) DO UPDATE SET t_max_c=excluded.t_max_c,
+              rain_days=excluded.rain_days, sea_c=excluded.sea_c
+        """, rows)
+    conn.commit()
+
+
+def add_tracked_trip(conn: sqlite3.Connection, *, holiday_id: str,
+                     destination: str, origins: list[str], alert_rule: str,
+                     threshold_eur: float | None, definition_yaml: str) -> int:
+    cur = conn.execute("""
+        INSERT INTO tracked_trips (created_at, holiday_id, destination,
+            origins, alert_rule, threshold_eur, active, definition_yaml)
+        VALUES (?,?,?,?,?,?,1,?)
+    """, (datetime.now(UTC).isoformat(), holiday_id, destination,
+          json.dumps(origins), alert_rule, threshold_eur, definition_yaml))
+    conn.commit()
+    return cur.lastrowid
+
+
+def tracked_trips(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(conn.execute(
+        "SELECT * FROM tracked_trips WHERE active=1 ORDER BY id DESC"))
 
 
 def sampler_state_all(conn: sqlite3.Connection) -> dict[tuple, dict]:

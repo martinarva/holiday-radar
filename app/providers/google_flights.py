@@ -159,19 +159,30 @@ class GoogleFlights:
             price = _to_price(getattr(f, "price", None))
             if price is None or price <= 0:
                 continue
-            legs = []
+            legs, details = [], []
             for sf in getattr(f, "flights", None) or []:
                 fa = getattr(getattr(sf, "from_airport", None), "code", "?")
                 ta = getattr(getattr(sf, "to_airport", None), "code", "?")
                 legs.append(f"{fa}-{ta}")
+                details.append({
+                    "from": fa, "to": ta,
+                    "departure": _as_text(getattr(sf, "departure", None)),
+                    "arrival": _as_text(getattr(sf, "arrival", None)),
+                    "duration": _as_text(getattr(sf, "duration", None)),
+                    "plane": _as_text(getattr(sf, "plane_type", None)),
+                })
             offers.append(VerifiedOffer(
                 origin=origin.upper(), destination=destination.upper(),
                 out_date=out_date, back_date=back_date,
                 price_total_eur=price,
                 airlines=tuple(str(a) for a in getattr(f, "airlines", ()) or ()),
-                legs=tuple(legs),
+                legs=tuple(legs), leg_details=tuple(details),
             ))
         return sorted(offers, key=lambda o: o.price_total_eur)
+
+
+def _as_text(v) -> str | None:
+    return None if v is None else str(v)
 
 
 def _to_price(v) -> float | None:

@@ -159,3 +159,22 @@ def test_offers_rerun_same_night_updates_not_duplicates(cfg, tmp_path):
                       ("RIX-AGP", "AGP-RIX"), ("LOT",))], seats=4)
     rows = dbm.offers_for_watch(conn, "autumn-2026", "RIX", "AGP")
     assert len(rows) == 1 and rows[0]["price_total_eur"] == 950.0
+
+
+def test_airline_stored_for_every_source(cfg, tmp_path):
+    """The operating carrier must be on the observation itself: implied by
+    the source for carrier feeds, taken from the itinerary for Google."""
+    conn = dbm.init_db(tmp_path / "a.db")
+    bt = _obs("airbaltic", date(2026, 10, 25), date(2026, 11, 1), 300.0)
+    ry = _obs("ryanair", date(2026, 10, 26), date(2026, 11, 1), 132.0,
+              basis="quoted_rt")
+    gg = Observation(origin="RIX", destination="AGP",
+                     out_date=date(2026, 10, 27), back_date=date(2026, 11, 1),
+                     price_adult_eur=250.0, source="google_flights",
+                     observed_at=NOW, price_basis="family_quote",
+                     raw={"airlines": ["LOT", "Austrian"]})
+    dbm.upsert_observations(conn, "autumn-2026", [bt, ry, gg], seats=4)
+    got = {r["source"]: json.loads(r["airlines"]) for r in
+           conn.execute("SELECT source, airlines FROM observations")}
+    assert got == {"airbaltic": ["airBaltic"], "ryanair": ["Ryanair"],
+                   "google_flights": ["LOT", "Austrian"]}

@@ -69,6 +69,7 @@ class ClimateRule:
     Marginal = within the tolerance band. strict=True turns marginal into
     excluded (opt-in hard filter)."""
     min_day_max_c: float | None = None
+    max_day_max_c: float | None = None   # too hot for young children
     min_sea_c: float | None = None
     max_rain_days: float | None = None
     tolerance_c: float = 2.0
@@ -106,6 +107,7 @@ class Config:
     relative_deal: dict
     providers: dict
     scheduler: dict
+    sampler: dict
     base_dir: Path = field(default_factory=Path)
 
     def active_holidays(self) -> list[Holiday]:
@@ -188,5 +190,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         relative_deal=raw.get("relative_deal", {}),
         providers=raw.get("providers", {}),
         scheduler=raw.get("scheduler", {}),
+        sampler={"google_budget": 260, "audit_budget": 4, "verify_budget": 8,
+                 "pace_seconds": 6, **(raw.get("sampler") or {})},
         base_dir=base,
     )

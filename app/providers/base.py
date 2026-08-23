@@ -86,7 +86,12 @@ class Observation:
 
 @dataclass(frozen=True)
 class VerifiedOffer:
-    """One stage-B result for an exact date pair (whole family, total)."""
+    """One stage-B result for an exact date pair (whole family, total).
+
+    `leg_details` carries per-leg departure/arrival/duration when the source
+    provides them — required by the conditional-hotel rule (a flight before
+    the ferry runs costs an extra night) and by departure-time filtering.
+    """
     origin: str
     destination: str
     out_date: date
@@ -97,3 +102,14 @@ class VerifiedOffer:
     source: str = "google_flights"
     level: str = FLIGHT_VERIFIED    # never implies bags/seats included
     observed_at: datetime = field(default_factory=utcnow)
+    leg_details: tuple[dict, ...] = ()
+
+    @property
+    def first_departure(self) -> str | None:
+        return (self.leg_details[0].get("departure")
+                if self.leg_details else None)
+
+    @property
+    def last_arrival(self) -> str | None:
+        return (self.leg_details[-1].get("arrival")
+                if self.leg_details else None)

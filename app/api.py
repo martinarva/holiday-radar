@@ -11,12 +11,14 @@ Run:  python -m app.cli serve  (uvicorn, default port 8765)
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from app import db as dbm
+from app import metrics
 from app.config import Config, load_config
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -58,6 +60,7 @@ def _best_payload(cfg: Config, h, row: dict | None) -> dict | None:
         "out_date": row["out_date"], "back_date": row["back_date"],
         "nights": (back - out).days,
         "is_direct": None if row["is_direct"] is None else bool(row["is_direct"]),
+        "airlines": json.loads(row["airlines"] or "[]"),
         "school_days": sd_before + sd_after,
         "school_days_before": sd_before,
         "school_days_after": sd_after,
@@ -72,7 +75,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
     @app.get("/")
     def index():
-        return FileResponse(WEB_DIR / "index.html")
+        # dev UI: never cache, so an edit is one refresh away
+        return FileResponse(WEB_DIR / "index.html", headers={
+            "Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"})
 
     @app.get("/health")
     def health():
@@ -103,6 +108,175 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             "errors": json.loads(r["errors_json"]) if r["errors_json"] else [],
             "summary": json.loads(r["summary_json"]),
         } for r in rows]
+
+    # ---------- UX-SPEC §13: opportunity-shaped endpoints ----------
+
+    @app.get("/api/radar")
+    def radar():
+        """Home payload: health, holiday cards, hero deal, recent movers."""
+        from app import climate as climate_mod, opportunity as opp
+        conn = _conn(cfg)
+        night = dbm.latest_night(conn)
+        cache = climate_mod.load_cache(cfg)
+        run = conn.execute(
+            "SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        errors = json.loads(run["errors_json"]) if run and run["errors_json"] else []
+        holidays, hero = [], None
+        for h in cfg.active_holidays():
+            ops = opp.build(cfg, conn, h, night, cache)
+            summary = opp.holiday_summary(cfg, conn, h, ops)
+            holidays.append(summary)
+            b = summary["best"]
+            if b and (hero is None
+                      or (b["recommendation_score"] or 0) > (hero["recommendation_score"] or 0)):
+                hero = {**b, "holiday": {k: summary[k] for k in
+                                         ("id", "name", "start", "end", "days_away")}}
+        movers = opp.recent_movers(conn)
+        conn.close()
+        return {
+            "updated_at": run["finished_at"] if run else None,
+            "night": night,
+            "health": "degraded" if errors else "healthy",
+            "error_count": len(errors),
+            "family": {"adults": cfg.passengers.adults,
+                       "children": cfg.passengers.children},
+            "origins": [o.code for o in cfg.origins],
+            "hero": hero, "holidays": holidays, "movers": movers,
+        }
+
+    @app.get("/api/holidays/{holiday_id}/opportunities")
+    def opportunities(holiday_id: str):
+        """Ranked opportunities (destination-first), NOT watches."""
+        from app import climate as climate_mod, opportunity as opp
+        h = cfg.holiday(holiday_id)
+        if h is None:
+            raise HTTPException(404, f"unknown holiday {holiday_id}")
+        conn = _conn(cfg)
+        night = dbm.latest_night(conn)
+        ops = opp.build(cfg, conn, h, night, climate_mod.load_cache(cfg))
+        summary = opp.holiday_summary(cfg, conn, h, ops)
+        conn.close()
+        return {"holiday": summary, "night": night, "opportunities": ops}
+
+    @app.get("/api/opportunities/{holiday_id}/{destination}")
+    def opportunity_detail(holiday_id: str, destination: str):
+        """One destination in full: origins, date matrix, price-vs-school,
+        history, verification, every stored itinerary."""
+        from app import climate as climate_mod, opportunity as opp
+        h = cfg.holiday(holiday_id)
+        if h is None:
+            raise HTTPException(404, f"unknown holiday {holiday_id}")
+        dst = destination.upper()
+        conn = _conn(cfg)
+        night = dbm.latest_night(conn)
+        ops = opp.build(cfg, conn, h, night, climate_mod.load_cache(cfg))
+        item = next((o for o in ops if o["destination"] == dst), None)
+        if item is None:
+            conn.close()
+            raise HTTPException(404, f"unknown destination {dst} for {holiday_id}")
+
+        # every priced date pair this night, per origin -> date matrix +
+        # the price-vs-school ladder
+        pairs = []
+        for r in conn.execute("""
+            SELECT * FROM observations
+            WHERE holiday_id=? AND destination=? AND observed_night=?
+              AND estimated_family_eur IS NOT NULL
+        """, (holiday_id, dst, night)):
+            out_d = date.fromisoformat(r["out_date"])
+            back_d = date.fromisoformat(r["back_date"])
+            og = cfg.origin(r["origin"])
+            nights = (back_d - out_d).days
+            logistics = og.logistics_eur(nights) if og else 0
+            sd_b, sd_a = h.school_days_breakdown(out_d, back_d, cfg.public_holidays)
+            pairs.append({
+                "origin": r["origin"], "out_date": r["out_date"],
+                "back_date": r["back_date"], "nights": nights,
+                "flights_eur": r["estimated_family_eur"],
+                "effective_eur": round(r["estimated_family_eur"] + logistics, 2),
+                "school_days": sd_b + sd_a, "school_before": sd_b,
+                "school_after": sd_a,
+                "is_direct": None if r["is_direct"] is None else bool(r["is_direct"]),
+                "airlines": json.loads(r["airlines"] or "[]"),
+                "source": r["source"],
+            })
+        # price-vs-school ladder: cheapest option for each school-day count
+        ladder: dict[int, dict] = {}
+        for p in pairs:
+            k = p["school_days"]
+            if k not in ladder or p["effective_eur"] < ladder[k]["effective_eur"]:
+                ladder[k] = p
+        ladder_list = [ladder[k] for k in sorted(ladder)]
+        base = ladder_list[0]["effective_eur"] if ladder_list else None
+        for p in ladder_list:
+            p["saving_vs_zero_eur"] = (round(base - p["effective_eur"], 2)
+                                       if base is not None else None)
+
+        offers = []
+        for og_code in {p["origin"] for p in pairs} or {o.code for o in cfg.origins}:
+            for r in dbm.offers_for_watch(conn, holiday_id, og_code, dst, night, 40):
+                offers.append({
+                    "origin": og_code, "out_date": r["out_date"],
+                    "back_date": r["back_date"], "rank": r["offer_rank"],
+                    "price_total_eur": r["price_total_eur"],
+                    "airlines": json.loads(r["airlines"] or "[]"),
+                    "legs": json.loads(r["legs"] or "[]"),
+                    "stops": r["stops"],
+                    "is_direct": bool(r["is_direct"]) if r["is_direct"] is not None else None,
+                    "source": r["source"], "role": r["observation_role"],
+                })
+        offers.sort(key=lambda o: o["price_total_eur"])
+
+        history = {og.code: metrics.watch_history(conn, holiday_id, og.code, dst)
+                   for og in cfg.origins}
+        conn.close()
+        return {"holiday": {"id": h.id, "name": h.name,
+                            "start": h.start.isoformat(),
+                            "end": h.end.isoformat()},
+                "opportunity": item, "date_pairs": pairs,
+                "school_ladder": ladder_list, "offers": offers,
+                "history": history, "night": night}
+
+    @app.get("/api/system")
+    def system():
+        """Everything the normal screens deliberately hide (UX-SPEC §32)."""
+        conn = _conn(cfg)
+        night = dbm.latest_night(conn)
+        runs = [dict(r) for r in conn.execute(
+            "SELECT * FROM runs ORDER BY id DESC LIMIT 10")]
+        cov = {}
+        for r in conn.execute(
+                "SELECT holiday_id, coverage_class, COUNT(*) c "
+                "FROM watch_state GROUP BY 1,2"):
+            cov.setdefault(r["holiday_id"], {})[r["coverage_class"]] = r["c"]
+        by_source = {r["source"]: r["c"] for r in conn.execute(
+            "SELECT source, COUNT(*) c FROM observations GROUP BY 1")}
+        last = json.loads(runs[0]["summary_json"]) if runs else {}
+        conn.close()
+        return {
+            "night": night,
+            "observations_by_source": by_source,
+            "coverage": cov,
+            "last_run": last,
+            "errors": (json.loads(runs[0]["errors_json"]) if runs
+                       and runs[0]["errors_json"] else []),
+            "runs": [{"kind": r["kind"], "finished_at": r["finished_at"],
+                      "summary": json.loads(r["summary_json"]),
+                      "errors": len(json.loads(r["errors_json"] or "[]"))}
+                     for r in runs],
+            "providers": [
+                {"name": "airBaltic", "role": "stage-A carrier",
+                 "state": "healthy" if by_source.get("airbaltic") else "idle"},
+                {"name": "Ryanair", "role": "stage-A carrier",
+                 "state": "healthy" if by_source.get("ryanair") else "idle"},
+                {"name": "Google sampler", "role": "stage-A + verify",
+                 "state": "healthy" if by_source.get("google_flights") else "idle"},
+                {"name": "SerpApi", "role": "verify backup", "state": "standby"},
+                {"name": "SearchApi", "role": "verify backup", "state": "standby"},
+                {"name": "Travelpayouts", "role": "rejected (E0 gate)",
+                 "state": "disabled"},
+            ],
+        }
 
     @app.get("/api/offers")
     def offers(holiday: str, origin: str, destination: str,
@@ -146,22 +320,37 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         conn.close()
         out = []
         for r in rows:
-            out.append({
+            price, ind = r["price_total_eur"], r["indicative_family_eur"]
+            item = {
                 "holiday_id": r["holiday_id"], "origin": r["origin"],
                 "destination": r["destination"],
                 "out_date": r["out_date"], "back_date": r["back_date"],
                 "verified_night": r["verified_night"],
-                "price_total_eur": r["price_total_eur"],
-                "indicative_family_eur": r["indicative_family_eur"],
-                "delta_eur": (round(r["price_total_eur"]
-                                    - r["indicative_family_eur"], 2)
-                              if r["price_total_eur"] is not None
-                              and r["indicative_family_eur"] is not None
-                              else None),
+                "price_total_eur": price,
+                "indicative_family_eur": ind,
                 "airlines": json.loads(r["airlines"] or "[]"),
                 "legs": json.loads(r["legs"] or "[]"),
                 "level": r["level"], "reason": r["reason"],
-            })
+            }
+            if r["level"] == "market-context":
+                # NOT a contradiction of the carrier fare: Google cannot price
+                # Ryanair, so this is the cheapest alternative — i.e. proof of
+                # how special the carrier fare is.
+                item.update({
+                    "headline": "cheapest non-Ryanair alternative",
+                    "carrier_fare_eur": ind,
+                    "alternative_eur": price,
+                    "saving_vs_alternative_eur": (round(price - ind, 2)
+                                                  if None not in (price, ind) else None),
+                    "delta_eur": None,
+                })
+            else:
+                item.update({
+                    "headline": "verified family total",
+                    "delta_eur": (round(price - ind, 2)
+                                  if None not in (price, ind) else None),
+                })
+            out.append(item)
         return out
 
     @app.get("/api/holidays")

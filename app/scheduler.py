@@ -117,10 +117,16 @@ def offer_to_observation(cfg: Config, offer) -> Observation:
 
 def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 audit_budget: int = 2, verify_budget: int = 5,
-                log=print, sleep_s: float = 0.12,
+                log=print, sleep_s: float = 0.12, google_pace_s: float = 0.0,
                 google_search=None, collect=None,
                 rng: random.Random | None = None) -> dict:
-    """One nightly cycle. Returns the run summary (also recorded in `runs`)."""
+    """One nightly cycle. Returns the run summary (also recorded in `runs`).
+
+    `google_pace_s` spreads the sampler over hours instead of hammering: with
+    the budget now covering every blind watch each night (owner decision — an
+    8-night sweep makes data a week stale), pacing is what keeps the volume
+    polite."""
+    pace = max(sleep_s, google_pace_s)
     rng = rng or random.Random()
     started = datetime.now(timezone.utc).isoformat()
     collect = collect or dryrun.collect
@@ -133,6 +139,13 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
     seats = cfg.passengers.seats
 
     conn = dbm.init_db(db_path)
+    # keep the DB self-describing: destinations, holidays and climate normals
+    # mirrored from config so analysis never needs the YAML
+    try:
+        from app import climate as climate_mod
+        dbm.sync_reference(conn, cfg, climate_mod.load_cache(cfg))
+    except Exception as e:                       # never abort a run for this
+        errors.append(f"reference sync: {e}")
 
     # --- persist carrier stage-A (discovery role) + watch state ---
     carrier_obs = 0
@@ -204,7 +217,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             dbm.upsert_observations(conn, r.holiday_id, [o], seats,
                                     role="discovery")
             google_hits.append((r, o))
-        time.sleep(sleep_s)
+        time.sleep(pace)
     log(f"discovery: {used_discovery}/{google_budget} queries "
         f"({len(floor_due)} floor-due), {len(google_hits)} priced")
 
@@ -228,7 +241,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             o = offer_to_observation(cfg, offers[0])
             dbm.upsert_observations(conn, r.holiday_id, [o], seats,
                                     role="audit")
-        time.sleep(sleep_s)
+        time.sleep(pace)
     log(f"audit: {used_audit}/{audit_budget} carrier-covered re-quoted")
 
     # --- E2-B.5 verification hook ---
@@ -288,7 +301,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 reason=(reason + "; source=ryanair, not on Google — this is the "
                         "cheapest non-Ryanair alternative, NOT a verification"),
                 indicative_family_eur=fam)
-            time.sleep(sleep_s)
+            time.sleep(pace)
             continue
         if o.source == "google_flights":
             # the discovery/audit quote already IS the exact family total
@@ -323,7 +336,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             legs=json.dumps(list(best.legs)) if best else "[]",
             level="flight-verified" if best else "verify-no-result",
             reason=reason, indicative_family_eur=fam)
-        time.sleep(sleep_s)
+        time.sleep(pace)
     log(f"verify hook: {used_verify}/{verify_budget} candidates handled "
         f"(pool {len(candidates)})")
 
