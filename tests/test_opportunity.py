@@ -136,11 +136,18 @@ def test_school_penalty_is_gentle_up_to_the_family_limit(cfg):
 
 def test_cheaper_tll_beats_dearer_zero_school_rix(cfg, tmp_path):
     """The exact case the owner flagged: TLL EUR 796 with 3 school days must
-    now win over RIX EUR 866 effective with none."""
+    win over RIX EUR 866 effective with none.
+
+    Both legs are seeded nonstop on purpose. The earlier version of this test
+    gave TLL a connection and RIX a nonstop, which quietly made directness —
+    not school days — the deciding variable; it then flipped by 0.012 the
+    moment connection quality gained weight. The school question is isolated
+    here and the directness trade-off gets its own test below.
+    """
     conn = dbm.init_db(tmp_path / "o.db")
     h = cfg.holiday("autumn-2026")
     _seed(conn, cfg, [
-        ("TLL", "AGP", 796.0, False, date(2026, 10, 23), date(2026, 11, 3),
+        ("TLL", "AGP", 796.0, True, date(2026, 10, 23), date(2026, 11, 3),
          "airbaltic"),                                     # 3 school days
         ("RIX", "AGP", 724.0, True, date(2026, 10, 25), date(2026, 11, 1),
          "airbaltic"),                                     # +142 logistics, 0 sd
@@ -150,3 +157,124 @@ def test_cheaper_tll_beats_dearer_zero_school_rix(cfg, tmp_path):
     by_origin = {o["origin"]: o for o in agp["origin_options"]}
     assert by_origin["RIX"]["effective_eur"] > by_origin["TLL"]["effective_eur"]
     assert agp["best_option"]["origin"] == "TLL"
+
+
+def test_a_nonstop_can_still_outrank_a_slightly_cheaper_connection(cfg, tmp_path):
+    """Directness is worth real money — the variable the test above removed.
+
+    EUR 70 cheaper does not buy back a change of planes, and the model should
+    say so rather than chasing the lowest number.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    _seed(conn, cfg, [
+        ("TLL", "AGP", 796.0, False, date(2026, 10, 23), date(2026, 11, 3),
+         "airbaltic"),
+        ("RIX", "AGP", 724.0, True, date(2026, 10, 25), date(2026, 11, 1),
+         "airbaltic"),
+    ])
+    ops = opp.build(cfg, conn, h, night=NOW.date().isoformat(), climate_cache={})
+    agp = next(o for o in ops if o["destination"] == "AGP")
+    assert agp["best_option"]["origin"] == "RIX"
+    assert agp["best_option"]["is_direct"] is True
+
+
+def test_absolute_price_counts_not_just_price_for_that_tier(cfg, tmp_path):
+    """Orlando EUR 2115 must not outrank Tirana EUR 687 on value.
+
+    Owner, 2026-08-23: both were judged only against what their own class of
+    destination usually costs, so tripling the price cost nothing. A family
+    budget is absolute.
+    """
+    cheap = opp._value_score(cfg, "AGP", 687.0, None)
+    dear = opp._value_score(cfg, "MCO", 2115.0, None)
+    assert cheap > dear
+    assert opp._affordability(cfg, 687.0) > opp._affordability(cfg, 2115.0)
+    # and it stays strictly monotonic — no plateau to hide behind
+    steps = [opp._affordability(cfg, e) for e in (400, 800, 1200, 2000, 3000)]
+    assert steps == sorted(steps, reverse=True)
+
+
+def test_an_overnight_layover_is_priced_in_not_blocked(cfg, tmp_path):
+    """The EUR 687 Tirana "bargain": 16h35 in Warsaw, hotel not included.
+
+    Owner could not reproduce it on any site; LOT wanted EUR 1222. The fare
+    was real, the itinerary was the catch. A wait that needs a bed must add
+    its cost to the effective price and lose points for comfort — but it is
+    priced in, never gated out. Owner: "it can still win if the price is
+    good." See the test below for that half.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    _seed(conn, cfg, [
+        ("TLL", "AGP", 687.0, False, date(2026, 10, 23), date(2026, 11, 3),
+         "google_flights"),
+    ])
+    conn.execute("""UPDATE observations SET max_layover_h=16.58,
+                    layover_label='16h35 in WAW (full day)', layover_overnight=1""")
+    conn.commit()
+    ops = opp.build(cfg, conn, h, night=NOW.date().isoformat(), climate_cache={})
+    opt = next(o for o in ops if o["destination"] == "AGP")["best_option"]
+    assert opt["layover"]["overnight"] is True
+    assert opt["layover"]["label"] == "16h35 in WAW (full day)"
+    # the hotel the layover forces is part of what the trip really costs
+    assert opt["layover_hotel_eur"] and opt["layover_hotel_eur"] > 0
+    assert opt["effective_eur"] > opt["flights_eur"] + opt["logistics_eur"]
+
+
+def test_a_humane_connection_outranks_a_punishing_one_at_equal_price(cfg, tmp_path):
+    """Same money, same everything — two hours in Warsaw beats sixteen."""
+    from app import itinerary as it
+    assert it.score_for_hours(2.0) > it.score_for_hours(4.0) > it.score_for_hours(16.0)
+    quick = opp._itinerary_score(False, 1, it.score_for_hours(2.0))
+    grim = opp._itinerary_score(False, 1, it.score_for_hours(16.0))
+    assert quick > grim
+    # a nonstop still beats both, and needs no connection evidence
+    assert opp._itinerary_score(True, 0, None) > quick
+
+
+def test_a_grim_layover_still_wins_when_the_price_justifies_it(cfg, tmp_path):
+    """Owner: "it can still win if the price is good."
+
+    Connection comfort is a weight, not a veto. Priced-in means the family
+    sees the real number and the trade-off, then a cheap enough fare carries
+    the day on its own merits.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 25), date(2026, 11, 1)
+    _seed(conn, cfg, [
+        ("TLL", "AGP", 1500.0, True, out, back, "google_flights"),   # nonstop
+        ("TLL", "BCN", 400.0, False, out, back, "google_flights"),   # grim, cheap
+    ])
+    conn.execute("""UPDATE observations SET max_layover_h=16.58,
+                    layover_overnight=1 WHERE destination='BCN'""")
+    conn.commit()
+    ops = opp.build(cfg, conn, h, night=NOW.date().isoformat(), climate_cache={})
+    summary = opp.holiday_summary(cfg, conn, h, ops)
+    bcn = next(o for o in ops if o["destination"] == "BCN")["best_option"]
+    assert bcn["effective_eur"] == 510.0        # 400 fare + 110 layover hotel
+    assert summary["best"]["destination"] == "BCN"
+
+
+def test_a_priced_destination_shows_even_without_a_watch_row(cfg, tmp_path):
+    """watch_state annotates; observations are the evidence of a fare.
+
+    Building the destination list from watch_state alone hid every Wizz Air
+    row — the targeted fetch writes no watch state — so Autumn 2027 reported
+    "not on sale yet" while the database held a EUR 560 nonstop TLL-FCO.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    o = Observation(origin="TLL", destination="FCO",
+                    out_date=date(2026, 10, 28), back_date=date(2026, 11, 4),
+                    price_adult_eur=169.98, source="wizzair", observed_at=NOW,
+                    price_basis="leg_sum", estimated_family_eur=679.92,
+                    is_direct=True)
+    dbm.upsert_observations(conn, h.id, [o], seats=4)
+    # deliberately NO write_watch_state call
+    ops = opp.build(cfg, conn, h, night=NOW.date().isoformat(), climate_cache={})
+    fco = next((x for x in ops if x["destination"] == "FCO"), None)
+    assert fco is not None, "a priced destination disappeared"
+    assert fco["best_option"]["effective_eur"] == 679.92
+    assert fco["best_option"]["airlines"] == ["Wizz Air"]

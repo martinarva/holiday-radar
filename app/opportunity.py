@@ -21,6 +21,7 @@ import statistics
 from datetime import date, datetime, timezone
 
 from app import climate as climate_mod
+from app import itinerary
 from app import db as dbm
 from app import metrics
 from app.config import Config
@@ -41,6 +42,10 @@ W_VALUE, W_QUALITY = .45, .55
 # which is not how this family decides. Directness and climate pick up the
 # freed weight.
 W_CLIMATE, W_ITINERARY, W_SCHOOL, W_LOGISTICS = .35, .35, .15, .15
+# Directness alone was too blunt: a "1 stop" that waits 16 hours in Warsaw is
+# not the same trip as one that waits 90 minutes. The itinerary weight is
+# therefore split between having few stops and the stops being humane.
+W_STOPS, W_LAYOVER = .55, .45
 
 
 def price_gate(effective: float, notify: float | None) -> float:
@@ -65,10 +70,9 @@ def _tier_of(cfg: Config, iata: str):
     return (cfg.tiers.get(dest.tier) if dest else None), (dest.tier if dest else None)
 
 
-def _value_score(cfg: Config, iata: str, effective: float,
-                 market_score: float | None) -> float:
-    """0–10. Uses the market anomaly when history exists, otherwise position
-    against the tier's buy threshold (promo-level by design)."""
+def _deal_score(cfg: Config, iata: str, effective: float,
+                market_score: float | None) -> float:
+    """0-10 on "is this cheap FOR THIS DESTINATION" — a relative judgement."""
     if market_score is not None:
         return market_score
     tier, _ = _tier_of(cfg, iata)
@@ -79,12 +83,53 @@ def _value_score(cfg: Config, iata: str, effective: float,
     return max(0.0, min(10.0, 12.0 - 5.0 * ratio))
 
 
-def _itinerary_score(is_direct: bool | None, stops: int | None) -> float:
+def _affordability(cfg: Config, effective: float) -> float:
+    """0-10 on "can this family write the cheque" — an absolute judgement."""
+    prefs = cfg.preferences or {}
+    comfortable = float(prefs.get("budget_comfortable_eur", 1000))
+    stretch = float(prefs.get("budget_stretch_eur", 2200))
+    # No plateau below "comfortable": most real choices sit in the cheap band,
+    # and a flat top there let a EUR 866 option tie a EUR 796 one, undoing the
+    # school-weight fix. Cheaper is better the whole way down.
+    if effective <= comfortable:
+        return 10.0 - 2.0 * effective / max(1.0, comfortable)
+    if effective >= stretch:
+        # keep decaying past the stretch point instead of flooring, so a
+        # EUR 4000 trip cannot tie a EUR 2200 one
+        return max(0.0, 4.0 - (effective - stretch) / max(1.0, stretch) * 4.0)
+    return 8.0 - 4.0 * (effective - comfortable) / max(1.0, stretch - comfortable)
+
+
+def _value_score(cfg: Config, iata: str, effective: float,
+                 market_score: float | None) -> float:
+    """0-10 blending the two questions a family actually asks.
+
+    Tier-relative value alone ranked a EUR 2115 Orlando above a EUR 687 Tirana
+    with comparable weather (owner, 2026-08-23): each was judged only against
+    what its own class of destination usually costs, so tripling the price
+    cost nothing. Absolute affordability now carries half the axis.
+    """
+    deal = _deal_score(cfg, iata, effective, market_score)
+    afford = _affordability(cfg, effective)
+    w = float((cfg.preferences or {}).get("deal_vs_budget", 0.5))
+    return w * deal + (1.0 - w) * afford
+
+
+def _stops_score(is_direct: bool | None, stops: int | None) -> float:
     if is_direct:
         return 10.0
     if stops is None:
         return 6.0
     return {0: 10.0, 1: 7.0}.get(stops, 4.0)
+
+
+def _itinerary_score(is_direct: bool | None, stops: int | None,
+                     layover_score: float | None = None) -> float:
+    """Few stops AND humane ones. A nonstop needs no connection evidence."""
+    base = _stops_score(is_direct, stops)
+    if is_direct or layover_score is None:
+        return base
+    return W_STOPS * base + W_LAYOVER * layover_score
 
 
 def _school_score(days: int, ok: int = 3) -> float:
@@ -155,6 +200,21 @@ def _climate_block(cfg: Config, iata: str, month: int, cache: dict) -> dict:
             "label": label, "beach": beach}
 
 
+# Stand-in annotation for a destination we have priced but never climate-
+# screened (a carrier fetch can outrun the watch builder).
+_UNWATCHED = {"status": "unknown", "score": None, "rule": "",
+              "dormant": False, "coverage_class": "covered_direct"}
+
+
+def _col(row, name, default=None):
+    """sqlite3.Row has no .get, and older rows predate newer columns."""
+    try:
+        v = row[name]
+    except (IndexError, KeyError):
+        return default
+    return default if v is None else v
+
+
 def _origin_option(cfg: Config, h: Holiday, og, row: dict,
                    conn) -> dict:
     out_d = date.fromisoformat(row["out_date"])
@@ -164,6 +224,15 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
     logistics = og.logistics_eur(nights)
     sd_b, sd_a = h.school_days_breakdown(out_d, back_d, cfg.public_holidays)
     airlines = json.loads(row["airlines"] or "[]")
+    # A connection long enough to need a bed is a cost, not a bargain: the
+    # EUR 687 Tirana "deal" was 16h35 in Warsaw (see app/itinerary.py).
+    max_lay = _col(row, "max_layover_h")
+    lay_overnight = _col(row, "layover_overnight")
+    # NB: not og.hotel_eur — that is the pre-departure room a RIX/HEL start
+    # may need. A room in the connecting airport costs the same whichever
+    # origin you left from, so it has its own setting.
+    lay_hotel = (float((cfg.preferences or {}).get("layover_hotel_eur", 110))
+                 if lay_overnight else 0.0)
     observed = datetime.fromisoformat(row["observed_at"])
     age_h = round((_now() - observed).total_seconds() / 3600, 1)
     verified = conn.execute("""
@@ -176,7 +245,8 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
         "origin": og.code,
         "flights_eur": fam,
         "logistics_eur": logistics,
-        "effective_eur": round((fam or 0) + logistics, 2),
+        "layover_hotel_eur": lay_hotel or None,
+        "effective_eur": round((fam or 0) + logistics + lay_hotel, 2),
         "adult_eur": row["price_adult_eur"],
         "out_date": row["out_date"], "back_date": row["back_date"],
         "nights": nights,
@@ -186,8 +256,17 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
         "school_before": sd_b, "school_after": sd_a,
         "source": row["source"], "price_basis": row["price_basis"],
         "age_hours": age_h,
+        # Clock times, where the source publishes them. Ryanair gives both
+        # directions; Google lists only the outbound legs of a round trip;
+        # airBaltic's calendar is date-resolution, so times stay null.
+        "times": {k: row[k] for k in ("out_departure", "out_arrival",
+                                      "in_departure", "in_arrival")},
         # Google cannot price Ryanair, so a Ryanair fare is authoritative from
         # the carrier and a Google check only surfaces alternatives.
+        "layover": {"max_hours": max_lay,
+                    "label": _col(row, "layover_label"),
+                    "overnight": None if lay_overnight is None
+                    else bool(lay_overnight)},
         "verify_mode": ("carrier-direct" if row["source"] == "ryanair"
                         else "google-verifiable"),
         "extra_time_h": og.extra_time_h,
@@ -204,8 +283,11 @@ def _score_option(cfg: Config, dst: str, opt: dict, clim: dict, tier) -> None:
     """Score one origin+date-pair candidate in place."""
     m = opt["market"]
     value = _value_score(cfg, dst, opt["effective_eur"], m.get("score"))
+    lay = opt.get("layover") or {}
+    lay_score = (None if lay.get("max_hours") is None
+                 else itinerary.score_for_hours(lay["max_hours"]))
     quality = (W_CLIMATE * (clim["score"] or 0)
-               + W_ITINERARY * _itinerary_score(opt["is_direct"], None)
+               + W_ITINERARY * _itinerary_score(opt["is_direct"], None, lay_score)
                + W_SCHOOL * _school_score(opt["school_days"],
                                           cfg.preferences.get("school_days_ok", 3))
                + W_LOGISTICS * _logistics_score(opt["logistics_eur"]))
@@ -290,12 +372,21 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
     dests: dict[str, list[str]] = {}
     for (og, dst) in states:
         dests.setdefault(dst, []).append(og)
+    # A fare with no watch_state row must not vanish. watch_state is the
+    # climate/coverage annotation; observations are the evidence that a price
+    # exists. Building the list from states alone hid every Wizz Air row (the
+    # targeted fetch writes no watch state) — autumn-2027 read "not on sale
+    # yet" while holding a EUR 560 nonstop TLL-FCO.
+    for (og, dst) in pair_rows:
+        if og not in dests.setdefault(dst, []):
+            dests[dst].append(og)
 
     out: list[dict] = []
     for dst, origin_codes in dests.items():
         dest_cfg = cfg.destination(dst)
         clim = _climate_block(cfg, dst, month, cache)
-        any_state = states[(origin_codes[0], dst)]
+        any_state = next((states[(c, dst)] for c in origin_codes
+                          if (c, dst) in states), _UNWATCHED)
         tier_for_dst, _ = _tier_of(cfg, dst)
         options = []
         for og_code in origin_codes:
@@ -338,7 +429,8 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
                 best_pair["zero_school_pair"] = _brief(zero_pair)
             options.append(best_pair)
 
-        dormant = all(states[(c, dst)]["dormant"] for c in origin_codes)
+        dormant = all(states.get((c, dst), _UNWATCHED)["dormant"]
+                      for c in origin_codes)
         if not options:
             ever_sampled = any(sampled.get((c, dst)) for c in origin_codes)
             state = ("dormant" if dormant

@@ -131,12 +131,15 @@ def test_offers_store_every_itinerary_ranked(cfg, tmp_path):
     """Owner request: keep all airline/routing combinations, not just the
     cheapest — a Google query returns 6-10 of them."""
     conn = dbm.init_db(tmp_path / "o.db")
+    # NB: Google lists only the OUTBOUND itinerary for a round-trip query, so
+    # leg count maps to stops as N-1 (this used to be read as N-2, which
+    # labelled one-stop itineraries nonstop).
     offers = [
-        _offer("AGP", 1408.0, ("RIX-HEL", "HEL-AGP", "AGP-HEL", "HEL-RIX"),
-               ("Finnair",)),
-        _offer("AGP", 998.0, ("RIX-BCN", "BCN-RIX"), ("LOT",)),
-        _offer("AGP", 1124.0, ("RIX-ZRH", "ZRH-AGP", "AGP-RIX"),
-               ("Air Baltic", "SWISS")),
+        _offer("AGP", 1408.0, ("RIX-HEL", "HEL-AGP", "AGP-HEL"),
+               ("Finnair",)),                                  # 2 stops
+        _offer("AGP", 998.0, ("RIX-AGP",), ("LOT",)),          # nonstop
+        _offer("AGP", 1124.0, ("RIX-ZRH", "ZRH-AGP"),
+               ("Air Baltic", "SWISS")),                       # 1 stop
     ]
     n = dbm.upsert_offers(conn, "autumn-2026", offers, seats=4, role="discovery")
     assert n == 3
@@ -146,6 +149,7 @@ def test_offers_store_every_itinerary_ranked(cfg, tmp_path):
     assert [r["price_total_eur"] for r in rows] == [998.0, 1124.0, 1408.0]
     assert json.loads(rows[0]["airlines"]) == ["LOT"]
     assert rows[0]["is_direct"] == 1 and rows[0]["stops"] == 0
+    assert rows[1]["stops"] == 1 and rows[1]["is_direct"] == 0
     assert json.loads(rows[2]["airlines"]) == ["Finnair"]
     assert rows[2]["stops"] == 2
     assert rows[0]["price_adult_eur"] == pytest.approx(249.5)
@@ -154,9 +158,9 @@ def test_offers_store_every_itinerary_ranked(cfg, tmp_path):
 def test_offers_rerun_same_night_updates_not_duplicates(cfg, tmp_path):
     conn = dbm.init_db(tmp_path / "o.db")
     dbm.upsert_offers(conn, "autumn-2026", [_offer("AGP", 1000.0,
-                      ("RIX-AGP", "AGP-RIX"), ("LOT",))], seats=4)
+                      ("RIX-AGP",), ("LOT",))], seats=4)
     dbm.upsert_offers(conn, "autumn-2026", [_offer("AGP", 950.0,
-                      ("RIX-AGP", "AGP-RIX"), ("LOT",))], seats=4)
+                      ("RIX-AGP",), ("LOT",))], seats=4)
     rows = dbm.offers_for_watch(conn, "autumn-2026", "RIX", "AGP")
     assert len(rows) == 1 and rows[0]["price_total_eur"] == 950.0
 
