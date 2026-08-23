@@ -18,7 +18,7 @@ watch coverage (of our origins × 43-destination pool).
 | Carrier | Relevant origins | Endpoint status | Window query | No-browser | Bot protection | Est. coverage | Verdict |
 |---|---|---|---|---|---|---|---|
 | **Ryanair** | TLL 6 · HEL 10 · RIX 21 routes | ✅ `farfnd/v4/roundTripFares` proven live | ✅ whole window, RT, one request | ✅ | none seen (UA header enough) | high (LCC leisure) | **ADMITTED — adapter shipped** (TODO: duration filter) |
-| Wizz Air | TLL only — **exited RIX**, HEL absent | fare-finder UI exists (Anywhere/Anytime) but fares fetch is worker-tunneled + PerimeterX; legacy timetable API gone (404) | UI yes, machine no | ❌ | PerimeterX | **1/43 pool dests** (TLL→FCO); TLL = 9 city routes | **NOT ADMITTED — sampler covers** |
+| Wizz Air | TLL only — **exited RIX**, HEL absent | ✅ `GET wizzair.com/api/metadata` → versioned base; `POST <base>/search/timetable` per-day fares both directions; `GET <base>/asset/map` = full network | ✅ arbitrary date range, per-day price + departure times (no arrivals) | ✅ plain urllib + UA | none seen | **2/58 pool dests (FCO, TIA) from TLL** | **ADMITTED 2026-08-23 — see correction below** |
 | **airBaltic** | TLL/RIX/HEL — RIX hub | ✅ `GET /api/fsf/outbound|inbound|overall` + `/api/orig-dest/en` (network map) | ✅ arbitrary date range, per-day price + `isDirect`, BOTH directions | ✅ plain curl + UA | none seen | **26/43 pool dests × 3 origins ≈ 312/516 watches (60%); RIX: all 26 DIRECT** | **ADMITTED — best source found** (per-leg adult prices; RT = out+in; pairing semantics to confirm in adapter) |
 | Norwegian | HEL (Canaries/Med) | ✅ endpoint FOUND: `GET /api/fare-calendar/calendar?originAirportCode=..&destinationAirportCode=..&outboundDate=..&tripType=2&currencyCode=EUR` — per-day out+in, `transitCount` (0=direct), soldOut | ✅ month per call, both directions | ❌ **Cloudflare wall** for any non-browser client | Cloudflare JSD | ~6-10 HEL watches | **NOT ADMITTED — fragile browser state**; revisit if HEL-Canaries becomes a gap |
 | Finnair | HEL long-haul & winter sun | calendar UI excellent (RT month minimums, TLL→TFS Nov–Mar €337/adult) but transport = **Akamai Bot Manager** obfuscated tunnels — nothing readable to replay | UI yes, machine no | ❌ | Akamai (heavy) | high — but Google indexes AY fares fine | **NOT ADMITTED — the network-carrier case the gate predicted** |
@@ -45,6 +45,12 @@ watch coverage (of our origins × 43-destination pool).
   (the classic month-fares POST) → 404 on all probed versions; buildnumber
   discovery endpoints gone too. The API structure has moved — needs browser
   recon for the current search/timetable calls.
+- **2026-08-23 (later, CORRECTION)** the 404s were self-inflicted. The probe
+  *guessed* version numbers; `GET https://wizzair.com/api/metadata` simply
+  hands out the live one (`{"public":{"apiUrl":"https://be.wizzair.com/29.12.0/Api"}}`)
+  and against that version the timetable POST answers **200**. Verified live:
+  TLL→WAW Sept 27 flights from €29.99, TLL→FCO autumn-2026 €169.98/adult
+  round trip. Adapter now discovers the version at runtime and never pins it.
 
 ### Browser recon session (2026-08-23) — RECON COMPLETE
 
@@ -62,10 +68,19 @@ watch coverage (of our origins × 43-destination pool).
   Coverage vs pool: TLL 26 bookable (10 direct), **RIX 26 — all direct**,
   HEL 26 (via RIX) → ≈ 312/516 watches. Adapter TODO: confirm out/in pairing
   semantics (whether inbound depends on selected outbound date).
-- **Wizz Air ❌.** Fare-finder UI works (TLL → Anywhere) but the fares fetch
-  is worker-tunneled and PerimeterX-guarded (fetch/XHR trap saw nothing;
-  `/tl` telemetry POSTs). Decisive anyway: TLL network is 9 city routes —
-  only FCO intersects the pool; RIX exited, HEL absent. External
+- **Wizz Air ✅ (was ❌ — overturned same day).** Two findings sank it and
+  both were wrong. (1) The "API gone" verdict came from guessed version
+  numbers, not a discovery call — see the correction in the probe log above.
+  (2) The fallback rationale, "NOT ADMITTED — sampler covers", was false:
+  Google Flights indexes **no ULCC at all**. Across 9819 sampled offers there
+  are zero Wizz, zero Ryanair and zero easyJet rows, against 2653 Lufthansa
+  and 1923 Finnair. A carrier the sampler cannot see is not covered by it.
+  The lesson generalises: "the sampler covers it" is a claim to verify
+  against stored offers, not an assumption to rest a rejection on.
+  Coverage is genuinely narrow — TLL only, and of 13 city routes just FCO and
+  TIA are in the pool (TIA is summer-seasonal, so it misses every holiday
+  window we watch). But FCO alone yielded the best-scoring option on the
+  board: €528 nonstop TLL→FCO for spring 2027. External
   confirmation: Wizz's last Latvia route (Kutaisi–Riga) was suspended
   2025-05-31 and the carrier is absent from RIX's summer-2026 schedule
   ([LSM](https://eng.lsm.lv/article/economy/transport/12.06.2023-wizz-air-gradually-leaves-riga-international-airport.a512383/),

@@ -624,3 +624,42 @@ Confirmed 2026-08-23 (owner):
    €-handicap and time-handicap kept separate (time never auto-priced);
    adopt via a portable watch definition (no cross-service coupling); and
    **E0 upgraded to a hard benchmark gate (A/B/C decision) that blocks E1**.
+
+16. **The false-bargain fixes (2026-08-23, owner-driven):** four separate
+    defects surfaced from one observation — a €687 TLL→TIA family round trip
+    the owner could not reproduce (LOT wanted €1222, and selecting it in
+    Google re-priced upward because the cached fare had no seats for four).
+    - **Stops were counted wrong.** Google lists only the OUTBOUND itinerary
+      for a round-trip query, so N legs mean N−1 stops. The code assumed
+      legs covered both directions (N−2) and so labelled every one-stop
+      itinerary nonstop: **9678 of 9819 stored offers** and 786 observations
+      were corrected.
+    - **Layovers were invisible.** The €687 fare is cheap because it parks
+      the family in Warsaw for 15–16 hours. `app/itinerary.py` now scores
+      connection comfort on the owner's tolerance ("a few hours is good,
+      four is bearable, sixteen is a lot") and adds a room to the effective
+      cost when a wait runs overnight or eats a whole day. **801 of 1512**
+      connecting observations already on record need a hotel by that rule.
+      It is a weight, never a veto — owner: "it can still win if the price
+      is good."
+    - **Value was purely tier-relative.** A €2115 Orlando outranked a €687
+      Tirana because each was judged only against what its own class of
+      destination usually costs. Value now blends the deal score with
+      absolute affordability against a family budget
+      (`preferences.budget_*`), with no plateau in the cheap band where most
+      real choices sit.
+    - **Fares with no watch row were hidden.** `build()` assembled its
+      destination list from `watch_state` alone, so Autumn 2027 reported
+      "not on sale yet" while holding a €560 nonstop. watch_state annotates;
+      observations are the evidence a price exists.
+17. **Wizz Air admitted, reversing the recon (2026-08-23):** the NOT ADMITTED
+    verdict rested on two wrong findings — a 404 caused by guessing API
+    versions instead of calling `wizzair.com/api/metadata`, and the
+    assumption that the Google sampler covered it. It does not: **Google
+    indexes no ULCC at all** (zero Wizz, Ryanair or easyJet rows in 9819
+    sampled offers). Coverage is narrow — TLL only, FCO and TIA in the pool,
+    TIA summer-seasonal — but FCO alone produced the best-scoring option on
+    the board (€528 nonstop, spring 2027) and the first Autumn 2027 price,
+    because Wizz opens schedules further ahead than the legacy carriers.
+    Standing rule: *"the sampler covers it" is a claim to verify against
+    stored offers, not an assumption to rest a rejection on.*
