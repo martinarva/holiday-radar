@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.parse
 import urllib.request
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from app.providers.base import (
     CONF_EXACT_PAIR, CONF_MONTH_GRID, Observation, ProviderError,
@@ -43,6 +44,39 @@ def _parse_dt(v: str | None) -> date | None:
         return date.fromisoformat(str(v)[:10])
     except ValueError:
         return None
+
+
+def months_span(window: tuple[date, date]) -> list[str]:
+    """Unique YYYY-MM months a window touches, in order (max a few)."""
+    months: list[str] = []
+    y, m = window[0].year, window[0].month
+    while (y, m) <= (window[1].year, window[1].month):
+        months.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m == 13:
+            y, m = y + 1, 1
+    return months
+
+
+def prices_for_windows(origin: str, destination: str,
+                       departure_window: tuple[date, date],
+                       return_window: tuple[date, date],
+                       token: str, currency: str = "eur",
+                       limit: int = 30) -> list[Observation]:
+    """Cached offers across ALL month combos the windows touch. A return
+    window like Oct 30 – Nov 4 spans two months; querying only the first
+    would silently hide November returns and undercount coverage."""
+    obs: list[Observation] = []
+    seen: set[tuple] = set()
+    for dep_m in months_span(departure_window):
+        for ret_m in months_span(return_window):
+            for o in prices_for_dates(origin, destination, dep_m, ret_m,
+                                      token, currency=currency, limit=limit):
+                key = (o.out_date, o.back_date, o.price_adult_eur)
+                if key not in seen:
+                    seen.add(key)
+                    obs.append(o)
+    return sorted(obs, key=lambda o: o.price_adult_eur)
 
 
 def prices_for_dates(origin: str, destination: str,
@@ -82,6 +116,16 @@ def prices_for_dates(origin: str, destination: str,
                 freshness = max(0.0, (datetime.now(dt.tzinfo) - dt).total_seconds() / 3600)
             except ValueError:
                 pass
+        if freshness is None:
+            # v3 has no found_at, but the deep link embeds the cached
+            # search's date as search_date=DDMMYYYY — day resolution is fine.
+            m = re.search(r"search_date=(\d{2})(\d{2})(\d{4})", item.get("link") or "")
+            if m:
+                try:
+                    sd = date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+                    freshness = max(0.0, (datetime.now(timezone.utc).date() - sd).days * 24.0)
+                except ValueError:
+                    pass
         obs.append(Observation(
             origin=origin.upper(), destination=destination.upper(),
             out_date=out_d, back_date=back_d,
@@ -89,6 +133,7 @@ def prices_for_dates(origin: str, destination: str,
             source="travelpayouts",
             freshness_hours=freshness,
             confidence=CONF_EXACT_PAIR if item.get("return_at") else CONF_MONTH_GRID,
-            raw={k: item.get(k) for k in ("airline", "flight_number", "found_at")},
+            raw={k: item.get(k) for k in
+                 ("airline", "flight_number", "transfers", "return_transfers", "link")},
         ))
     return sorted(obs, key=lambda o: o.price_adult_eur)

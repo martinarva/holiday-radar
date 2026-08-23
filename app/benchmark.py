@@ -36,16 +36,12 @@ class WatchResult:
         return self.in_window[0] if self.in_window else None
 
 
-def _months(h: Holiday) -> tuple[str, str]:
-    d0, _ = h.departure_window()
-    r0, _ = h.return_window()
-    return d0.strftime("%Y-%m"), r0.strftime("%Y-%m")
-
-
 def run_screen(cfg: Config, token: str, max_destinations: int = 15,
                holidays: list[str] | None = None,
                log=print) -> list[WatchResult]:
-    """Stage-A pass over the benchmark matrix. One TP request per watch."""
+    """Stage-A pass over the benchmark matrix; window-spanning months are
+    handled by prices_for_windows (a return window Oct 30 - Nov 4 must query
+    both October and November)."""
     hols = [h for h in cfg.active_holidays()
             if holidays is None or h.id in holidays]
     dests = cfg.destinations[:max_destinations]
@@ -53,18 +49,14 @@ def run_screen(cfg: Config, token: str, max_destinations: int = 15,
     total = len(hols) * len(cfg.origins) * len(dests)
     n = 0
     for h in hols:
-        dep_m, ret_m = _months(h)
         for o in cfg.origins:
             for d in dests:
                 n += 1
                 w = WatchResult(h.id, o.code, d.iata)
                 try:
-                    obs = tp.prices_for_dates(o.code, d.iata, dep_m, ret_m, token)
-                    # second departure month if the window spans a month edge
-                    d0, d1 = h.departure_window()
-                    if d1.month != d0.month:
-                        obs += tp.prices_for_dates(
-                            o.code, d.iata, d1.strftime("%Y-%m"), ret_m, token)
+                    obs = tp.prices_for_windows(
+                        o.code, d.iata, h.departure_window(),
+                        h.return_window(), token)
                     w.observations = obs
                     w.in_window = sorted(
                         (x for x in obs if h.in_windows(x.out_date, x.back_date)),

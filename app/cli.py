@@ -79,12 +79,11 @@ def cmd_probe_tp(cfg: Config, args) -> None:
     if not token:
         _fail("TRAVELPAYOUTS_TOKEN not set (put it in .env)")
     h = _holiday(cfg, args.holiday)
-    dep_m = h.departure_window()[0].strftime("%Y-%m")
-    ret_m = h.return_window()[0].strftime("%Y-%m")
-    obs = tp.prices_for_dates(args.origin, args.dest, dep_m, ret_m, token)
+    obs = tp.prices_for_windows(args.origin, args.dest, h.departure_window(),
+                                h.return_window(), token)
     seats = cfg.passengers.seats
     print(f"{len(obs)} cached offers {args.origin.upper()}→{args.dest.upper()} "
-          f"({dep_m}, cheapest first):")
+          f"({h.id} window months, cheapest first):")
     for o in obs[:12]:
         inw = "in-window" if h.in_windows(o.out_date, o.back_date) else "outside "
         age = f"{o.freshness_hours:.0f}h old" if o.freshness_hours is not None else "age n/a"
