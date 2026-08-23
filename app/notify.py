@@ -96,10 +96,12 @@ def describe(cfg: Config, holiday, item: dict, opt: dict) -> dict:
     parts.append("no school missed" if not school
                  else f"{school} school day{'s' if school > 1 else ''}")
     # NB: not `key`/`label` — those hold the deal grade from above.
-    for what, field in (("layover hotel", "layover_hotel_eur"),
-                        (f"{opt['origin']} hotel night", "origin_hotel_eur")):
-        if opt.get(field):
-            parts.append(f"includes €{opt[field]:.0f} {what}")
+    if opt.get("layover_hotel_eur"):
+        parts.append(f"includes €{opt['layover_hotel_eur']:.0f} layover hotel")
+    if opt.get("origin_hotel_eur"):
+        n = int(opt.get("origin_hotel_nights") or 1)
+        parts.append(f"includes €{opt['origin_hotel_eur']:.0f} for "
+                     f"{n} {opt['origin']} hotel night{'s' if n > 1 else ''}")
     return {
         "holiday_id": holiday.id, "holiday": holiday.name,
         "destination": item["destination"],
@@ -113,6 +115,7 @@ def describe(cfg: Config, holiday, item: dict, opt: dict) -> dict:
         "logistics_eur": opt.get("logistics_eur"),
         "layover_hotel_eur": opt.get("layover_hotel_eur"),
         "origin_hotel_eur": opt.get("origin_hotel_eur"),
+        "origin_hotel_nights": opt.get("origin_hotel_nights"),
         "out_date": opt["out_date"], "back_date": opt["back_date"],
         "nights": opt["nights"],
         "airlines": opt.get("airlines") or [],
@@ -174,23 +177,22 @@ def _all_time_low(cfg: Config, conn, holiday_id: str, destination: str,
     rightly stays on bare fares.)
     """
     rows = conn.execute(
-        """SELECT o.origin, o.out_date, o.back_date, o.estimated_family_eur f,
-                  o.layover_overnight, o.out_departure, o.in_arrival
-             FROM observations o
-            WHERE o.holiday_id=? AND o.destination=? AND o.observed_night < ?
-              AND o.estimated_family_eur IS NOT NULL""",
+        """SELECT * FROM observations
+            WHERE holiday_id=? AND destination=? AND observed_night < ?
+              AND estimated_family_eur IS NOT NULL""",
         (holiday_id, destination, before_night)).fetchall()
     best = None
     for r in rows:
-        og = cfg.origin(r["origin"])
-        if og is None:
+        if cfg.origin(r["origin"]) is None:
             continue
         nights = (date.fromisoformat(r["back_date"])
                   - date.fromisoformat(r["out_date"])).days
-        eff = opportunity.effective_cost(cfg, r["f"], og.logistics_eur(nights),
-                                         r["layover_overnight"])
-        if og.hotel_needed(r["out_departure"], r["in_arrival"]):
-            eff = round(eff + float(og.hotel_eur or 0), 2)
+        # row_costs(), not a second copy of the arithmetic. The copy still
+        # charged a single room off the old boolean while row_costs() had
+        # moved to counting two, so the same historical trip was EUR 710 here
+        # and EUR 800 everywhere else — and a genuine record could go
+        # unannounced because the baseline it had to beat was too low.
+        eff = opportunity.row_costs(cfg, r, nights)["effective_eur"]
         best = eff if best is None else min(best, eff)
     return best
 

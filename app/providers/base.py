@@ -45,6 +45,12 @@ def utcnow() -> datetime:
 # anything. Add a source here and every one of those follows automatically.
 ULCC_SOURCES = frozenset({"ryanair", "wizzair"})
 
+# Sources that answer with their WHOLE calendar in one call. For these a date
+# pair missing from tonight's reply is meaningful — sold out or withdrawn —
+# so a remembered price may only be carried briefly. A rotating sampler says
+# nothing by omission, and must not be aged on the same clock.
+SNAPSHOT_SOURCES = frozenset({"airbaltic", "ryanair", "wizzair"})
+
 
 @dataclass(frozen=True)
 class Observation:

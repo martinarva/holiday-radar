@@ -375,6 +375,12 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 "airlines": json.loads(r["airlines"] or "[]"),
                 "legs": json.loads(r["legs"] or "[]"),
                 "level": r["level"], "reason": r["reason"],
+                # which candidate this check belongs to; without it a consumer
+                # cannot tell an airBaltic check from a Wizz one on the same
+                # pair, and NULL means "unattributed, confirms nobody"
+                "candidate_source": (r["candidate_source"]
+                                     if "candidate_source" in r.keys()
+                                     else None),
             }
             if r["level"] == "market-context":
                 # NOT a contradiction of the carrier fare: Google indexes no

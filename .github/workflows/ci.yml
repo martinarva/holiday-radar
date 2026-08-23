@@ -28,7 +28,9 @@ jobs:
       - run: pip check
       - run: ruff check app tests
       - run: python -m compileall -q app
-      - run: pytest -q
+      # `python -m` puts the checkout on sys.path; bare `pytest`
+      # cannot import `app` and fails before collecting anything.
+      - run: python -m pytest -q
 
   image:
     runs-on: ubuntu-latest

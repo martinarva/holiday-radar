@@ -19,6 +19,10 @@ preferences:
   # us the flight is gone; without a ceiling, per-pair history resurrects it
   # forever.
   stale_after_nights: 3
+  # Nights a throttled sampler needs to revisit the same date pair. Only used
+  # when sampler.pairs_per_watch > 0; with the full grid every source is a
+  # snapshot and stale_after_nights applies to all of them.
+  rotation_nights: 45
   # What the family can absorb for the whole trip (flights + getting to the
   # airport + any forced hotel). Ranking blends "cheap for this destination"
   # with "affordable in absolute terms" — without the second half a EUR 2115

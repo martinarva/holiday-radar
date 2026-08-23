@@ -232,3 +232,47 @@ def test_an_audit_sits_beside_its_discovery_row_not_on_top_of_it():
     dbm.upsert_observations(conn, "autumn-2026", [disc], seats=4,
                             role="discovery", night="2026-08-23")
     assert conn.execute("SELECT COUNT(*) c FROM observations").fetchone()["c"] == 2
+
+
+def test_a_legacy_verification_is_recovered_or_confirms_nothing():
+    """NULL candidate_source must not mean "matches every provider".
+
+    The column was added but old rows kept NULL and the lookup treated NULL
+    as a wildcard, so one pre-migration check confirmed airBaltic AND Wizz on
+    the same pair — the exact bug the column exists to prevent. Migration
+    0040 recovers the source from the reason text where it was recorded.
+    """
+    conn = dbm.init_db(":memory:")
+    dbm.insert_verification(
+        conn, holiday_id="autumn-2026", origin="RIX", destination="BCN",
+        out_date="2026-10-27", back_date="2026-11-03", price_total_eur=998.0,
+        airlines="[]", legs="[]", level="market-context",
+        reason=("indicative family 468 <= 1.25 x notify; source=ryanair, "
+                "not on Google — this is the cheapest alternative"),
+        indicative_family_eur=468.0, night="2026-08-23")
+    # simulate a pre-migration row: the writer knew, the column did not exist
+    conn.execute("UPDATE verifications SET candidate_source = NULL")
+    conn.commit()
+    dbm.run_migration(conn, "0040_verification_source_backfill")
+
+    got = conn.execute("SELECT candidate_source FROM verifications").fetchone()
+    assert got["candidate_source"] == "ryanair", "the source was in the text"
+
+    # an ambiguous row stays NULL and confirms nobody
+    dbm.insert_verification(
+        conn, holiday_id="autumn-2026", origin="TLL", destination="AGP",
+        out_date="2026-10-26", back_date="2026-11-01", price_total_eur=767.0,
+        airlines="[]", legs="[]", level="flight-verified",
+        reason="indicative family 767 <= 1.25 x notify",
+        indicative_family_eur=767.0, night="2026-08-23")
+    conn.execute("UPDATE verifications SET candidate_source = NULL "
+                 "WHERE destination='AGP'")
+    conn.commit()
+    dbm.run_migration(conn, "0040_verification_source_backfill")
+    assert conn.execute("SELECT candidate_source FROM verifications "
+                        "WHERE destination='AGP'").fetchone()[0] is None
+    for src in ("airbaltic", "wizzair", "ryanair"):
+        assert not dbm.recent_verification_exists(
+            conn, "autumn-2026", "TLL", "AGP", "2026-10-26", "2026-11-01",
+            night="2026-08-23", candidate_source=src), \
+            f"an ambiguous row must not confirm {src}"

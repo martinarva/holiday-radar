@@ -634,3 +634,40 @@ def test_a_withdrawn_flight_is_not_resurrected_forever(cfg, tmp_path):
     rows = opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg)
     carried = [r for r in rows if r["_from_night"]]
     assert len(carried) == 1 and carried[0]["_from_night"] == "2026-08-22"
+
+
+def test_the_stale_ttl_follows_what_a_source_means_by_silence(cfg):
+    """A snapshot carrier and a rotating sampler say different things.
+
+    airBaltic returns its whole calendar, so a missing pair means gone. The
+    throttled Google sampler revisits a pair once per rotation, so silence
+    means "not its turn yet" — one global TTL pruned the very grid the
+    rotation was building.
+    """
+    snapshot = opp._ttl(cfg, "airbaltic")
+    full_grid_google = opp._ttl(cfg, "google_flights")
+    assert snapshot == full_grid_google == 3, "full grid: everyone is a snapshot"
+
+    throttled = load_config(ROOT / "config.yaml")
+    throttled.sampler["pairs_per_watch"] = 1
+    assert opp._ttl(throttled, "airbaltic") == 3, "a carrier is still a snapshot"
+    assert opp._ttl(throttled, "google_flights") > 30, \
+        "a rotating sampler needs a whole cycle before silence means anything"
+
+
+def test_hotel_risk_counts_every_unpriced_night(cfg):
+    """One certain night says nothing about the other.
+
+    With an 08:00 departure already charged and the return unknown, the
+    second EUR 90 is still exposure — the old test asked only whether any
+    hotel had been priced and reported no risk at all.
+    """
+    hel = cfg.origin("HEL")
+    known_out = "2026-10-26T08:00"
+    both_unknown = {"out_departure": None, "in_arrival": None}
+    one_known = {"out_departure": known_out, "in_arrival": None}
+    both_known = {"out_departure": known_out, "in_arrival": "2026-11-01T23:30"}
+
+    assert opp._hotel_risk(hel, both_unknown) == hel.hotel_eur * 2
+    assert opp._hotel_risk(hel, one_known) == hel.hotel_eur
+    assert opp._hotel_risk(hel, both_known) == 0.0

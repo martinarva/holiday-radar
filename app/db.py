@@ -254,6 +254,19 @@ MIGRATIONS: list[tuple[str, str]] = [
         CREATE INDEX IF NOT EXISTS ix_verif_candidate
           ON verifications (holiday_id, origin, destination, out_date,
                             back_date, candidate_source)"""),
+
+    ("0040_verification_source_backfill", """
+        UPDATE verifications
+           SET candidate_source =
+               rtrim(substr(
+                   substr(reason, instr(reason, 'source=') + 7),
+                   1,
+                   CASE
+                     WHEN instr(substr(reason, instr(reason, 'source=') + 7), ',') > 0
+                     THEN instr(substr(reason, instr(reason, 'source=') + 7), ',') - 1
+                     ELSE length(substr(reason, instr(reason, 'source=') + 7))
+                   END))
+         WHERE candidate_source IS NULL AND instr(reason, 'source=') > 0"""),
 ]
 
 # source -> operating carrier when the source implies it
@@ -312,6 +325,17 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def run_migration(conn: sqlite3.Connection, name: str) -> None:
+    """Re-run one migration by name, ignoring whether it is already applied.
+
+    Only for tests and for repairing a database whose data changed after the
+    migration first ran — a data backfill is idempotent in a way DDL is not.
+    """
+    ddl = dict(MIGRATIONS)[name]
+    conn.executescript(ddl)
+    conn.commit()
 
 
 def init_db(path: str | Path) -> sqlite3.Connection:
@@ -582,9 +606,9 @@ def recent_verification_exists(conn: sqlite3.Connection, holiday_id: str,
         SELECT MAX(verified_night) n FROM verifications
         WHERE holiday_id=? AND origin=? AND destination=?
           AND out_date=? AND back_date=?
-          AND (candidate_source IS ? OR ? IS NULL)
+          AND candidate_source IS ?
     """, (holiday_id, origin, destination, out_date, back_date,
-          candidate_source, candidate_source)).fetchone()
+          candidate_source)).fetchone()
     if not r or not r["n"]:
         return False
     from datetime import date, timedelta

@@ -25,7 +25,7 @@ from app import db as dbm
 from app import itinerary, metrics
 from app.config import Config
 from app.holidays import Holiday
-from app.providers.base import ULCC_SOURCES
+from app.providers.base import SNAPSHOT_SOURCES, ULCC_SOURCES
 from app.watchlist import holiday_mid_month
 
 # Recommendation model (v1, deliberately explicit — UX-SPEC §16 says the exact
@@ -283,18 +283,43 @@ def latest_priced_rows(conn, holiday_id: str, night: str | None,
     sql = sql.format(
         dst_inner="AND destination=?" if destination else "",
         dst_outer="AND o.destination=?" if destination else "")
-    ttl = int((cfg.preferences or {}).get("stale_after_nights", 3)) if cfg else 3
     rows = []
     for r in conn.execute(sql, params):
         row = dict(r)
         row["_from_night"] = (None if r["observed_night"] == night
                               else r["observed_night"])
-        # ">= ttl": stale_after_nights: 3 means a reading three nights old
-        # IS stale, not that it survives a fourth.
-        if row["_from_night"] and _nights_apart(row["_from_night"], night) >= ttl:
+        if (row["_from_night"]
+                and _nights_apart(row["_from_night"], night) >= _ttl(cfg, r["source"])):
             continue        # nobody has seen this fare in days; let it go
         rows.append(row)
     return rows
+
+
+def _ttl(cfg: Config | None, source: str) -> float:
+    """How many nights a price may be carried, by what its source means.
+
+    A snapshot carrier (airBaltic, Ryanair, Wizz) hands back its whole
+    calendar in one call, so a pair missing from tonight's answer is sold out
+    or withdrawn — carry it briefly, then let it go.
+
+    The Google sampler is the opposite: in throttle mode
+    (`sampler.pairs_per_watch > 0`) it revisits any given pair only once per
+    rotation, so a pair legitimately goes unseen for as long as the rotation
+    takes. A single global TTL pruned exactly the grid the rotation was
+    building — "throttle keeps accumulating" was not true with one applied
+    to both.
+    """
+    prefs = (cfg.preferences or {}) if cfg else {}
+    if source in SNAPSHOT_SOURCES:
+        return float(prefs.get("stale_after_nights", 3))
+    sampler = (cfg.sampler or {}) if cfg else {}
+    per_night = int(sampler.get("pairs_per_watch") or 0)
+    if per_night <= 0:
+        # full grid every night: the sampler is a snapshot source too
+        return float(prefs.get("stale_after_nights", 3))
+    # a whole rotation, plus slack for nights the budget skipped the watch
+    cycle = float(prefs.get("rotation_nights", 45))
+    return cycle + float(prefs.get("stale_after_nights", 3))
 
 
 def _nights_apart(a: str, b: str) -> int:
@@ -325,9 +350,22 @@ def row_costs(cfg: Config, row, nights: int) -> dict:
         "logistics_eur": logistics,
         "layover_hotel_eur": lay_hotel or None,
         "origin_hotel_eur": origin_hotel or None,
+        "origin_hotel_nights": nights_hotel or None,
         "effective_eur": round((fare or 0) + logistics + lay_hotel
                                + origin_hotel, 2),
     }
+
+
+def _hotel_risk(og, times: dict) -> float:
+    """Unpriced hotel exposure: one room per leg whose clock time is unknown."""
+    if not og or not og.hotel_eur:
+        return 0.0
+    unknown = 0
+    if og.hotel_if_departure_before and not times.get("out_departure"):
+        unknown += 1
+    if og.hotel_if_arrival_after and not times.get("in_arrival"):
+        unknown += 1
+    return float(og.hotel_eur) * unknown
 
 
 def _col(row, name, default=None):
@@ -353,20 +391,19 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
     times = {k: row[k] for k in ("out_departure", "out_arrival",
                                  "in_departure", "in_arrival")}
     costs = row_costs(cfg, row, nights)      # the one cost definition
-    origin_hotel = costs["origin_hotel_eur"] or 0.0
     observed = datetime.fromisoformat(row["observed_at"])
     age_h = round((_now() - observed).total_seconds() / 3600, 1)
-    # Matched on the SOURCE too. A verification belongs to the candidate it
-    # checked: without this an airBaltic check was pasted onto every provider
-    # for the same pair, and a Wizz EUR 400 was displayed "flight-verified"
-    # by a EUR 550 check that had nothing to do with it. Rows written before
-    # the column existed carry NULL and still match their own pair.
+    # A verification belongs to the candidate it checked, and to no other.
+    # Letting NULL match anything reproduced the original bug for every
+    # pre-migration row: one old check confirmed airBaltic AND Wizz on the
+    # same pair. Migration 0040 recovers the source from the reason text
+    # where it was recorded; whatever stays NULL is genuinely ambiguous and
+    # confirms nothing — an unproven fare reads "indicative", which is true.
     verified = conn.execute("""
         SELECT level, price_total_eur, verified_at FROM verifications
         WHERE holiday_id=? AND origin=? AND destination=? AND out_date=?
-          AND back_date=?
-          AND (candidate_source = ? OR candidate_source IS NULL)
-        ORDER BY (candidate_source IS NULL), id DESC LIMIT 1
+          AND back_date=? AND candidate_source = ?
+        ORDER BY id DESC LIMIT 1
     """, (row["holiday_id"], row["origin"], row["destination"],
           row["out_date"], row["back_date"], row["source"])).fetchone()
     return {
@@ -375,6 +412,7 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
         "logistics_eur": costs["logistics_eur"],
         "layover_hotel_eur": costs["layover_hotel_eur"],
         "origin_hotel_eur": costs["origin_hotel_eur"],
+        "origin_hotel_nights": costs["origin_hotel_nights"],
         "effective_eur": costs["effective_eur"],
         "adult_eur": row["price_adult_eur"],
         "out_date": row["out_date"], "back_date": row["back_date"],
@@ -401,17 +439,12 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
         "verify_mode": ("carrier-direct" if row["source"] in ULCC_SOURCES
                         else "google-verifiable"),
         "extra_time_h": og.extra_time_h,
-        # A risk stands while EITHER relevant time is still unknown. Google
-        # publishes the outbound departure but no return arrival, which is the
-        # common case — treating "one of the two is known" as settled quietly
-        # dropped Helsinki's late-return hotel risk from almost every option.
-        "hotel_risk_eur": ((og.hotel_eur or None)
-                           if not origin_hotel and (
-                               (og.hotel_if_departure_before
-                                and not times["out_departure"])
-                               or (og.hotel_if_arrival_after
-                                   and not times["in_arrival"]))
-                           else None),
+        # What a room could still cost ON TOP of what is already priced.
+        # Each leg is its own night, so an 08:00 departure that is already
+        # charged says nothing about an unknown return: with one night
+        # certain and one unknown the risk is the second EUR 90, and with
+        # both unknown it is EUR 180 rather than EUR 90.
+        "hotel_risk_eur": _hotel_risk(og, times) or None,
         "verification": ({"level": verified["level"],
                           "price_total_eur": verified["price_total_eur"],
                           "at": verified["verified_at"]} if verified

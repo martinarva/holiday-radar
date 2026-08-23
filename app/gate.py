@@ -12,6 +12,7 @@ from datetime import date
 
 from app import db as dbm
 from app.config import Config
+from app.providers.base import ULCC_SOURCES
 
 
 @dataclass
@@ -112,17 +113,28 @@ def run_checks(cfg: Config, db_path, min_runs: int = 3,
         "sampler bookkeeping persists and advances", advanced > 0,
         f"{advanced}/{total_state} watches past rotation 1"))
 
-    mislabeled = conn.execute("""
-        SELECT COUNT(*) c FROM verifications v
-        WHERE v.level='flight-verified' AND EXISTS (
-          SELECT 1 FROM observations o
-          WHERE o.holiday_id=v.holiday_id AND o.origin=v.origin
-            AND o.destination=v.destination AND o.out_date=v.out_date
-            AND o.back_date=v.back_date AND o.source='ryanair')
-        """).fetchone()["c"]
+    # Google indexes no ULCC, so a ULCC candidate can never be
+    # flight-verified. Ask about the verification's OWN candidate_source: the
+    # old form asked whether Ryanair merely also flew the pair, which failed
+    # a perfectly correct airBaltic verification just because Ryanair
+    # happened to serve the same route — and never looked at Wizz at all.
+    placeholders = ",".join("?" * len(ULCC_SOURCES))
+    mislabeled = conn.execute(f"""
+        SELECT COUNT(*) c FROM verifications
+        WHERE level='flight-verified'
+          AND candidate_source IN ({placeholders})
+        """, tuple(sorted(ULCC_SOURCES))).fetchone()["c"]
     checks.append(Check(
-        "no Ryanair candidate labelled flight-verified", mislabeled == 0,
-        f"{mislabeled} mislabelled rows"))
+        "no low-cost-carrier candidate labelled flight-verified",
+        mislabeled == 0, f"{mislabeled} mislabelled rows"))
+
+    unattributed = conn.execute(
+        "SELECT COUNT(*) c FROM verifications WHERE candidate_source IS NULL"
+    ).fetchone()["c"]
+    checks.append(Check(
+        "every verification names the candidate it checked",
+        unattributed == 0,
+        f"{unattributed} row(s) confirm nothing because their source is unknown"))
 
     # coverage invariants recomputed from the DB alone
     from app.dryrun import compute_metrics, rows_from_db

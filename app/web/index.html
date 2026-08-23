@@ -292,7 +292,9 @@ async function viewRadar(el){
           <div class="mut small">effective family cost${b.logistics_eur ?
             ` — ${eur(b.flights_eur)} flights + ${eur(b.logistics_eur)} logistics` : ""}${
             b.layover_hotel_eur ? ` + ${eur(b.layover_hotel_eur)} layover hotel` : ""}${
-            b.origin_hotel_eur ? ` + ${eur(b.origin_hotel_eur)} hotel night` : ""}</div>
+            b.origin_hotel_eur ? ` + ${eur(b.origin_hotel_eur)} for ${
+              b.origin_hotel_nights || 1} ${esc(b.origin)} hotel night${
+              (b.origin_hotel_nights || 1) > 1 ? "s" : ""}` : ""}</div>
         </div>
         <div style="min-width:220px">
           <div><b>${esc(b.origin)} → ${esc(h.destination)}</b> · ${stops(b)}</div>
@@ -531,7 +533,9 @@ async function viewOpportunity(el, hid, dst){
     <div class="big price" style="margin-top:10px">${eur(b.effective_eur)}</div>
     <div class="mut small">${b.logistics_eur ? `${eur(b.flights_eur)} flights + ${eur(b.logistics_eur)} ${esc(b.origin)} logistics`
       : "no origin logistics"}${b.layover_hotel_eur ? ` + ${eur(b.layover_hotel_eur)} layover hotel` : ""}${
-      b.origin_hotel_eur ? ` + ${eur(b.origin_hotel_eur)} ${esc(b.origin)} hotel night` : ""}${
+      b.origin_hotel_eur ? ` + ${eur(b.origin_hotel_eur)} for ${
+        b.origin_hotel_nights || 1} ${esc(b.origin)} hotel night${
+        (b.origin_hotel_nights || 1) > 1 ? "s" : ""}` : ""}${
       b.hotel_risk_eur ? ` · +${eur(b.hotel_risk_eur)} hotel if the flight is early/late` : ""}</div>
     ${b.from_night ? `<div class="mut small">carried over from ${esc(b.from_night)} — no fresh quote tonight</div>` : ""}
     <div class="facts small">${schoolChip(b)} · ${escList(b.airlines," + ")||"airline n/a"}</div>

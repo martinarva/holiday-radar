@@ -453,3 +453,41 @@ def test_sampler_output_is_not_mistaken_for_carrier_coverage(cfg, tmp_path):
     assert s["airbaltic_covered"] == 0, "the sampler is not a carrier"
     assert s["carrier_covered"] == 0
     assert s["blind_active"] == 1
+
+
+def test_the_gate_judges_a_verification_by_its_own_candidate(cfg, tmp_path):
+    """Not by who else happens to fly the route.
+
+    A correct airBaltic flight-verified row failed the gate purely because
+    Ryanair also served the pair, and Wizz was never checked at all.
+    """
+    from app.gate import run_checks
+
+    conn_path = tmp_path / "g.db"
+    conn = dbm.init_db(conn_path)
+    for src in ("airbaltic", "ryanair"):
+        dbm.upsert_observations(conn, "autumn-2026", [_obs(
+            "RIX", "BCN", date(2026, 10, 27), date(2026, 11, 3), 200.0,
+            source=src)], seats=4, night="2026-08-23")
+    dbm.insert_verification(
+        conn, holiday_id="autumn-2026", origin="RIX", destination="BCN",
+        out_date="2026-10-27", back_date="2026-11-03", price_total_eur=800.0,
+        airlines="[]", legs="[]", level="flight-verified", reason="checked",
+        indicative_family_eur=800.0, night="2026-08-23",
+        candidate_source="airbaltic")
+    conn.close()
+
+    named = {c.name: c for c in run_checks(cfg, conn_path)}
+    key = "no low-cost-carrier candidate labelled flight-verified"
+    assert named[key].ok, "airBaltic IS on Google; Ryanair sharing the route is irrelevant"
+
+    conn = dbm.init_db(conn_path)
+    dbm.insert_verification(
+        conn, holiday_id="autumn-2026", origin="RIX", destination="BCN",
+        out_date="2026-10-27", back_date="2026-11-03", price_total_eur=700.0,
+        airlines="[]", legs="[]", level="flight-verified", reason="wrong",
+        indicative_family_eur=700.0, night="2026-08-23",
+        candidate_source="wizzair")
+    conn.close()
+    named = {c.name: c for c in run_checks(cfg, conn_path)}
+    assert not named[key].ok, "Google cannot flight-verify a Wizz fare"
