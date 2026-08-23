@@ -299,6 +299,28 @@ MIGRATIONS: list[tuple[str, str]] = [
           pairs_per_watch  INTEGER NOT NULL,
           recorded_at      TEXT NOT NULL
         )"""),
+
+    ("0044_pair_probes_per_night", """
+        CREATE TABLE IF NOT EXISTS pair_probes_v2 (
+          holiday_id   TEXT NOT NULL,
+          origin       TEXT NOT NULL,
+          destination  TEXT NOT NULL,
+          out_date     TEXT NOT NULL,
+          back_date    TEXT NOT NULL,
+          source       TEXT NOT NULL,
+          probed_night TEXT NOT NULL,
+          found        INTEGER NOT NULL,
+          PRIMARY KEY (holiday_id, origin, destination, out_date, back_date,
+                       source, probed_night)
+        )"""),
+    ("0045_pair_probes_migrate", """
+        INSERT OR IGNORE INTO pair_probes_v2
+          SELECT holiday_id, origin, destination, out_date, back_date, source,
+                 probed_night, found FROM pair_probes"""),
+    ("0046_pair_probes_drop_v1", """
+        DROP TABLE IF EXISTS pair_probes"""),
+    ("0047_collection_mode_runs", """
+        ALTER TABLE collection_mode ADD COLUMN runs INTEGER NOT NULL DEFAULT 1"""),
 ]
 
 # source -> operating carrier when the source implies it
@@ -370,25 +392,36 @@ def record_pair_probe(conn: sqlite3.Connection, holiday_id: str, origin: str,
     probe that returns nothing is a tombstone — the one signal that says the
     fare really has disappeared.
     """
+    # One row PER NIGHT. Keying without the night meant each probe erased the
+    # last, so an as-of query for a date when the pair HAD been tombstoned no
+    # longer saw it — the table remembered only the present.
     conn.execute("""
-        INSERT INTO pair_probes (holiday_id, origin, destination, out_date,
-                                 back_date, source, probed_night, found)
+        INSERT INTO pair_probes_v2 (holiday_id, origin, destination, out_date,
+                                    back_date, source, probed_night, found)
         VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(holiday_id, origin, destination, out_date, back_date,
-                    source)
-        DO UPDATE SET probed_night=excluded.probed_night, found=excluded.found
+                    source, probed_night)
+        DO UPDATE SET found=excluded.found
     """, (holiday_id, origin, destination, out_date, back_date, source,
           night, int(found)))
     conn.commit()
 
 
 def empty_probes(conn: sqlite3.Connection, holiday_id: str) -> dict:
-    """(origin, destination, out, back, source) -> night we last found nothing."""
-    return {(r["origin"], r["destination"], r["out_date"], r["back_date"],
-             r["source"]): r["probed_night"]
-            for r in conn.execute(
-                "SELECT * FROM pair_probes WHERE holiday_id=? AND found=0",
-                (holiday_id,))}
+    """(origin, destination, out, back, source) -> nights we found nothing.
+
+    Every night is kept, not merely the latest: "was this pair known to be
+    gone on the 22nd?" is a different question from "is it gone now", and an
+    as-of view has to be able to answer the first.
+    """
+    out: dict = {}
+    for r in conn.execute(
+            "SELECT * FROM pair_probes_v2 WHERE holiday_id=? AND found=0 "
+            "ORDER BY probed_night", (holiday_id,)):
+        key = (r["origin"], r["destination"], r["out_date"], r["back_date"],
+               r["source"])
+        out.setdefault(key, []).append(r["probed_night"])
+    return out
 
 
 def record_collection_mode(conn: sqlite3.Connection, night: str,
@@ -402,13 +435,20 @@ def record_collection_mode(conn: sqlite3.Connection, night: str,
     data as a full-grid snapshot — deleting most of what had just been
     collected. The run records its own mode; the reader obeys it.
     """
+    # A night can be collected more than once — the scheduled full-grid run,
+    # then a manual `--pairs-per-watch 1`. Overwriting relabelled the FIRST
+    # run's rows with the second run's policy and pruned data that was
+    # perfectly good. Keep whichever mode implies the longer patience (a
+    # rotation, >0), so a re-run can never delete what came before it.
     conn.execute("""
         INSERT INTO collection_mode (observed_night, pairs_per_watch,
-                                     recorded_at)
-        VALUES (?,?,?)
+                                     recorded_at, runs)
+        VALUES (?,?,?,1)
         ON CONFLICT(observed_night) DO UPDATE SET
-          pairs_per_watch=excluded.pairs_per_watch,
-          recorded_at=excluded.recorded_at
+          pairs_per_watch=MAX(collection_mode.pairs_per_watch,
+                              excluded.pairs_per_watch),
+          recorded_at=excluded.recorded_at,
+          runs=collection_mode.runs + 1
     """, (night, int(pairs_per_watch), datetime.now(UTC).isoformat()))
     conn.commit()
 
@@ -431,16 +471,45 @@ def run_migration(conn: sqlite3.Connection, name: str) -> None:
 
 
 def init_db(path: str | Path) -> sqlite3.Connection:
+    """Open the database, applying any pending migrations exactly once.
+
+    The web and scheduler containers start together and both call this. The
+    old loop read the applied set, then ran DDL outside any transaction, so
+    both processes could see the same migration pending and both try it —
+    the loser hitting "duplicate column name" and taking its container down
+    on boot. Two things prevent that now: BEGIN IMMEDIATE takes SQLite's
+    write lock so only one process migrates at a time (the other waits out
+    busy_timeout rather than failing), and the applied set is re-read INSIDE
+    that lock so the waiter sees the winner's work.
+
+    executescript() cannot be used here — it commits before running, which
+    would drop the lock. Every migration is a single statement (asserted by
+    the tests), so conn.execute is enough.
+    """
     conn = connect(path)
+    conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("""CREATE TABLE IF NOT EXISTS schema_migrations
                     (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)""")
-    applied = {r["name"] for r in conn.execute("SELECT name FROM schema_migrations")}
-    for name, ddl in MIGRATIONS:
-        if name not in applied:
-            conn.executescript(ddl)
-            conn.execute("INSERT INTO schema_migrations VALUES (?, ?)",
-                         (name, datetime.now(UTC).isoformat()))
     conn.commit()
+
+    applied = {r["name"] for r in conn.execute("SELECT name FROM schema_migrations")}
+    if all(name in applied for name, _ in MIGRATIONS):
+        return conn                     # the common case: no lock, no wait
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        applied = {r["name"] for r in
+                   conn.execute("SELECT name FROM schema_migrations")}
+        for name, ddl in MIGRATIONS:
+            if name in applied:
+                continue
+            conn.execute(ddl)
+            conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES (?, ?)",
+                         (name, datetime.now(UTC).isoformat()))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return conn
 
 

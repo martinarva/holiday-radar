@@ -297,12 +297,13 @@ def latest_priced_rows(conn, holiday_id: str, night: str | None,
         # rerun of the same night can price a pair and then find it gone —
         # skipping the check for today's rows kept the vanished fare on
         # screen. Hence >= on the observation, not >.
-        probed = gone.get((r["origin"], r["destination"], r["out_date"],
-                           r["back_date"], r["source"]))
         # ...and it must not reach backwards. `night` may be a historical
         # as-of query, and a tombstone written on the 23rd said nothing about
-        # what we knew on the 22nd.
-        if (probed and probed >= r["observed_night"] and probed <= night):
+        # what we knew on the 22nd. Any empty probe in (observed, night]
+        # counts, so a pair that vanished and came back is handled too.
+        probed = gone.get((r["origin"], r["destination"], r["out_date"],
+                           r["back_date"], r["source"])) or ()
+        if any(r["observed_night"] <= n <= night for n in probed):
             continue        # asked again by then, found nothing: retire it
         if not row["_from_night"]:
             rows.append(row)

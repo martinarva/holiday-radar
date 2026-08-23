@@ -276,3 +276,44 @@ def test_a_legacy_verification_is_recovered_or_confirms_nothing():
             conn, "autumn-2026", "TLL", "AGP", "2026-10-26", "2026-11-01",
             night="2026-08-23", candidate_source=src), \
             f"an ambiguous row must not confirm {src}"
+
+
+def test_every_migration_is_a_single_statement():
+    """init_db runs them with execute(), not executescript().
+
+    executescript commits before running, which would drop the write lock
+    that keeps two containers from migrating at once.
+    """
+    for name, ddl in dbm.MIGRATIONS:
+        assert ";" not in ddl, f"{name} must be one statement"
+
+
+def test_two_processes_starting_together_migrate_once(tmp_path):
+    """The web and scheduler containers boot at the same moment.
+
+    Reading the applied set outside a transaction let both see the same
+    migration pending; the loser hit "duplicate column name" and died on
+    boot.
+    """
+    import threading
+
+    path = tmp_path / "race.db"
+    errors, ready = [], threading.Barrier(4)
+
+    def start():
+        try:
+            ready.wait(timeout=10)
+            dbm.init_db(path).close()
+        except Exception as e:                     # noqa: BLE001
+            errors.append(repr(e))
+
+    threads = [threading.Thread(target=start) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert errors == [], f"concurrent init_db failed: {errors}"
+    conn = dbm.init_db(path)
+    n = conn.execute("SELECT COUNT(*) c FROM schema_migrations").fetchone()["c"]
+    assert n == len(dbm.MIGRATIONS), "each migration recorded exactly once"

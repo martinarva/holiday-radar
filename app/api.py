@@ -103,6 +103,13 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         night = dbm.latest_night(conn)
         run = conn.execute(
             "SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        # Health is judged on the last COLLECTION run, not the last row in
+        # the table. The 07:00 alert slot writes after the 02:45 cycle, so a
+        # crashed nightly was masked by a perfectly successful digest and
+        # /health went back to 200 while collection stayed broken.
+        nightly = conn.execute(
+            "SELECT kind, finished_at FROM runs "
+            "WHERE kind LIKE 'nightly%' ORDER BY id DESC LIMIT 1").fetchone()
         n_obs = conn.execute("SELECT COUNT(*) c FROM observations").fetchone()["c"]
         conn.close()
         last = None
@@ -114,12 +121,14 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         # A recorded failure must show as unhealthy. The scheduler container
         # has no healthcheck of its own, so a daemon stuck in a retry loop
         # looked perfectly well to anything watching this endpoint.
-        ok = not (run and (run["kind"].endswith("-failed")
-                           or run["finished_at"] is None))
+        judged = nightly or run
+        ok = not (judged and (judged["kind"].endswith("-failed")
+                              or judged["finished_at"] is None))
         if not ok:
             response.status_code = 503     # so a probe actually notices
         return {"ok": ok, "latest_night": night,
-                "observations_total": n_obs, "last_run": last}
+                "observations_total": n_obs, "last_run": last,
+                "last_collection": (nightly["kind"] if nightly else None)}
 
     @app.get("/api/runs")
     def runs(limit: int = 20):
@@ -296,6 +305,30 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             cov.setdefault(r["holiday_id"], {})[r["coverage_class"]] = r["c"]
         by_source = {r["source"]: r["c"] for r in conn.execute(
             "SELECT source, COUNT(*) c FROM observations GROUP BY 1")}
+        # "healthy" has to mean "answered lately". Counting all of history
+        # pinned a provider green forever on one row from weeks ago. The
+        # window is a span of DAYS back from the latest night — counting the
+        # last N nights that happen to exist in the table would have called a
+        # July row recent in a database whose only other night is August.
+        from datetime import date as _date
+        from datetime import timedelta as _td
+
+        window = int((cfg.preferences or {}).get(
+            "provider_healthy_within_nights") or 3)
+        recent = {}
+        if night:
+            try:
+                cutoff = (_date.fromisoformat(night) - _td(days=window)).isoformat()
+            except ValueError:
+                cutoff = night
+            recent = {r["source"]: r["c"] for r in conn.execute(
+                "SELECT source, COUNT(*) c FROM observations "
+                "WHERE observed_night > ? GROUP BY 1", (cutoff,))}
+
+        def carrier_state(src):
+            if recent.get(src):
+                return "healthy"
+            return "stale" if by_source.get(src) else "idle"
         last = json.loads(runs[0]["summary_json"]) if runs else {}
         conn.close()
         return {
@@ -311,13 +344,13 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                      for r in runs],
             "providers": [
                 {"name": "airBaltic", "role": "stage-A carrier",
-                 "state": "healthy" if by_source.get("airbaltic") else "idle"},
+                 "state": carrier_state("airbaltic")},
                 {"name": "Ryanair", "role": "stage-A carrier",
-                 "state": "healthy" if by_source.get("ryanair") else "idle"},
+                 "state": carrier_state("ryanair")},
                 {"name": "Wizz Air", "role": "stage-A carrier (TLL only)",
-                 "state": "healthy" if by_source.get("wizzair") else "idle"},
+                 "state": carrier_state("wizzair")},
                 {"name": "Google sampler", "role": "stage-A + verify",
-                 "state": "healthy" if by_source.get("google_flights") else "idle"},
+                 "state": carrier_state("google_flights")},
                 {"name": "SerpApi", "role": "verify backup", "state": "standby"},
                 {"name": "SearchApi", "role": "verify backup", "state": "standby"},
                 {"name": "Travelpayouts", "role": "rejected (E0 gate)",

@@ -790,3 +790,56 @@ def test_a_reader_obeys_the_mode_the_night_was_collected_in(cfg, tmp_path):
     rows = opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg)
     assert len(rows) == 1, "the run's own mode decides, not the reader's config"
     assert rows[0]["_from_night"] == "2026-07-29"
+
+
+def test_a_probe_history_is_kept_per_night_not_overwritten(cfg, tmp_path):
+    """An as-of view must see what was known THEN.
+
+    Keyed without the night, each probe erased the previous one, so the
+    table remembered only the present: a pair tombstoned on the 22nd and
+    found again on the 24th looked, from the 22nd's viewpoint, as though it
+    had never been missing.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+
+    def price(night):
+        dbm.upsert_observations(conn, h.id, [Observation(
+            origin="TLL", destination="AGP", out_date=out, back_date=back,
+            price_adult_eur=200.0, source="google_flights",
+            estimated_family_eur=800.0, is_direct=True)], seats=4, night=night)
+
+    def probe(night, found):
+        dbm.record_pair_probe(conn, h.id, "TLL", "AGP", out.isoformat(),
+                              back.isoformat(), "google_flights", night, found)
+
+    price("2026-08-21")
+    probe("2026-08-22", found=False)        # gone
+    probe("2026-08-24", found=True)         # back
+    price("2026-08-24")
+
+    kept = dbm.empty_probes(conn, h.id)[
+        ("TLL", "AGP", out.isoformat(), back.isoformat(), "google_flights")]
+    assert kept == ["2026-08-22"], "the empty night must survive a later hit"
+
+    # as of the 22nd it was gone...
+    assert opp.latest_priced_rows(conn, h.id, "2026-08-22", cfg=cfg) == []
+    # ...and by the 24th it is back, on its own fresh reading
+    rows = opp.latest_priced_rows(conn, h.id, "2026-08-24", cfg=cfg)
+    assert len(rows) == 1 and rows[0]["_from_night"] is None
+
+
+def test_a_second_run_cannot_relabel_the_first_runs_night(cfg, tmp_path):
+    """The scheduled full-grid run, then a manual --pairs-per-watch 1.
+
+    Overwriting the night's mode applied the second run's policy to the
+    first run's rows and pruned data that was perfectly good.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    dbm.record_collection_mode(conn, "2026-07-29", pairs_per_watch=1)
+    dbm.record_collection_mode(conn, "2026-07-29", pairs_per_watch=0)
+    assert dbm.collection_modes(conn)["2026-07-29"] == 1, \
+        "keep the mode that implies the longer patience"
+    row = conn.execute("SELECT runs FROM collection_mode").fetchone()
+    assert row["runs"] == 2, "and record that the night was collected twice"

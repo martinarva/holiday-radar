@@ -542,7 +542,7 @@ def test_an_empty_google_answer_leaves_a_tombstone(cfg, tmp_path):
                 collect=_fake_collect(cfg, n_blind=1, n_covered=0, dormant=0),
                 rng=random.Random(1))
     conn = dbm.init_db(conn_path)
-    probes = list(conn.execute("SELECT * FROM pair_probes"))
+    probes = list(conn.execute("SELECT * FROM pair_probes_v2"))
     assert len(probes) == 1
     assert probes[0]["found"] == 0
     assert probes[0]["source"] == "google_flights"

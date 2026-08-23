@@ -19,6 +19,9 @@ preferences:
   # us the flight is gone; without a ceiling, per-pair history resurrects it
   # forever.
   stale_after_nights: 3
+  # A provider reads "healthy" only if it answered within this many of the
+  # most recent nights; older than that and it is "stale", not fine.
+  provider_healthy_within_nights: 3
   # Nights a throttled sampler needs to revisit the same date pair. Only used
   # when sampler.pairs_per_watch > 0; with the full grid every source is a
   # snapshot and stale_after_nights applies to all of them.

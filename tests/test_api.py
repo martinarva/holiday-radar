@@ -175,3 +175,63 @@ def test_the_detail_view_agrees_with_the_card_that_links_to_it(tmp_path):
     assert detail["effective_eur"] == card["effective_eur"]
     assert detail["origin_hotel_eur"] == card["origin_hotel_eur"]
     assert rows[0]["_from_night"] == "2026-08-22"
+
+
+def test_a_successful_digest_does_not_hide_a_failed_nightly(tmp_path):
+    """Health is about collection, not about the last row in the table.
+
+    The 07:00 alert slot writes after the 02:45 cycle, so a crashed nightly
+    was masked and /health answered 200 while collection was broken.
+    """
+    from fastapi.testclient import TestClient
+
+    from app import db as dbm
+    from app.api import create_app
+
+    cfg = load_config(ROOT / "config.yaml")
+    cfg.base_dir = tmp_path
+    conn = dbm.init_db(tmp_path / "data" / "radar.db")
+    dbm.record_run(conn, "nightly-failed", NOW.isoformat(),
+                   {"night": "2026-08-23", "ok": False}, errors=["boom"])
+    dbm.record_run(conn, "alerts", NOW.isoformat(),
+                   {"night": "2026-08-23", "queued": 0, "delivered": 0})
+    conn.close()
+
+    c = TestClient(create_app(cfg))
+    r = c.get("/health")
+    assert r.status_code == 503, "a later successful digest must not mask it"
+    body = r.json()
+    assert body["ok"] is False
+    assert body["last_collection"] == "nightly-failed"
+    assert body["last_run"]["kind"] == "alerts"    # still reported, honestly
+
+
+def test_a_provider_that_has_gone_quiet_reads_stale_not_healthy(tmp_path):
+    """One row from weeks ago pinned a carrier green forever."""
+    from datetime import date
+
+    from fastapi.testclient import TestClient
+
+    from app import db as dbm
+    from app.api import create_app
+    from app.providers.base import Observation
+
+    cfg = load_config(ROOT / "config.yaml")
+    cfg.base_dir = tmp_path
+    conn = dbm.init_db(tmp_path / "data" / "radar.db")
+
+    def obs(src, night):
+        dbm.upsert_observations(conn, "autumn-2026", [Observation(
+            origin="TLL", destination="AGP", out_date=date(2026, 10, 26),
+            back_date=date(2026, 11, 1), price_adult_eur=100.0, source=src,
+            estimated_family_eur=400.0, is_direct=True)], seats=4, night=night)
+
+    obs("ryanair", "2026-07-01")            # long ago
+    obs("airbaltic", "2026-08-23")          # tonight
+    conn.close()
+
+    states = {p["name"]: p["state"]
+              for p in TestClient(create_app(cfg)).get("/api/system").json()["providers"]}
+    assert states["airBaltic"] == "healthy"
+    assert states["Ryanair"] == "stale", "silent for weeks is not healthy"
+    assert states["Wizz Air"] == "idle", "never seen is not stale"

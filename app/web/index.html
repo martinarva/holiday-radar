@@ -659,7 +659,9 @@ async function viewOpportunity(el, hid, dst){
       ps.forEach(p => cell[p.out_date+"|"+p.back_date] = p);
       const prices = ps.map(p=>p.effective_eur);
       const lo = Math.min(...prices), hi = Math.max(...prices);
-      // markers: € cheapest here, ★ the recommended pair, ✓ cheapest 0-school
+      // Markers: ▼ cheapest here, ★ the recommended pair, ✓ cheapest
+      // 0-school. NOT "€" for cheapest — every cell already starts with a
+      // euro sign, so "€866 €✓" read as a typo rather than as two marks.
       const cheapCell = ps.reduce((a,x)=> x.effective_eur < a.effective_eur ? x : a);
       const zeroCells = ps.filter(x=>!x.school_days);
       const zeroCell = zeroCells.length
@@ -667,7 +669,7 @@ async function viewOpportunity(el, hid, dst){
       const mark = p => {
         const m = [];
         if(b && p.origin===b.origin && p.out_date===b.out_date && p.back_date===b.back_date) m.push("★");
-        if(p===cheapCell) m.push("€");
+        if(p===cheapCell) m.push("▼");
         if(zeroCell && p===zeroCell) m.push("✓");
         return m.length ? `<span class="star" style="font-size:11px"> ${m.join("")}</span>` : "";
       };
@@ -688,6 +690,12 @@ async function viewOpportunity(el, hid, dst){
         }).join("")}</tr>`).join("")}</tbody></table></div>`);
       el.append(mt);
     }
+    // The marks were unexplained anywhere on screen.
+    el.append($(`<p class="mut small" style="margin:-4px 0 14px">
+      <span class="star">★</span> recommended ·
+      <span class="star">▼</span> cheapest for this origin ·
+      <span class="star">✓</span> cheapest with no school missed ·
+      🏫 school days it costs</p>`));
   }
 
   if(d.offers.length){
@@ -737,7 +745,7 @@ async function viewSystem(el){
     <div class="card"><h3>Providers</h3><div class="list">${
       s.providers.map(p=>`<div class="line">
         <div><div>${esc(p.name)}</div><div class="mut small">${esc(p.role)}</div></div>
-        <span class="pill ${p.state==="healthy"?"good":p.state==="disabled"?"grey":"info"}">${p.state}</span>
+        <span class="pill ${p.state==="healthy"?"good":p.state==="stale"?"fair":p.state==="disabled"?"grey":"info"}">${esc(p.state)}</span>
       </div>`).join("")}</div></div>
   </div>`));
 
