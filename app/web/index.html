@@ -573,7 +573,8 @@ async function viewOpportunity(el, hid, dst){
                  : `<span style="color:var(--fair)">costs ${eur(dv)} more</span>`;
       lb.append($(`<tr><td>${p.school_days?("🏫 "+p.school_days):"✓ none"}</td>
         <td>${dfmt(p.out_date)} → ${dfmt(p.back_date)} <span class="mut">(${p.nights}n)</span></td>
-        <td>${p.origin}</td><td class="n price">${eur(p.effective_eur)}</td>
+        <td>${p.origin}</td><td class="n price">${eur(p.effective_eur)}${
+          p.layover_hotel_eur ? `<br><span class="mut small">incl. ${eur(p.layover_hotel_eur)} hotel</span>` : ""}</td>
         <td class="n">${cell}</td></tr>`));
     }
     el.append(l);

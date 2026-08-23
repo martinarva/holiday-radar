@@ -189,11 +189,18 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             nights = (back_d - out_d).days
             logistics = og.logistics_eur(nights) if og else 0
             sd_b, sd_a = h.school_days_breakdown(out_d, back_d, cfg.public_holidays)
+            overnight = opp._col(r, "layover_overnight")
             pairs.append({
                 "origin": r["origin"], "out_date": r["out_date"],
                 "back_date": r["back_date"], "nights": nights,
                 "flights_eur": r["estimated_family_eur"],
-                "effective_eur": round(r["estimated_family_eur"] + logistics, 2),
+                # same definition as the headline — the ladder and the date
+                # grid used to omit the layover hotel and so disagreed with it
+                "effective_eur": opp.effective_cost(
+                    cfg, r["estimated_family_eur"], logistics, overnight),
+                "layover_hotel_eur": opp.layover_hotel_eur(cfg, overnight) or None,
+                "max_layover_h": opp._col(r, "max_layover_h"),
+                "layover_label": opp._col(r, "layover_label"),
                 "school_days": sd_b + sd_a, "school_before": sd_b,
                 "school_after": sd_a,
                 "is_direct": None if r["is_direct"] is None else bool(r["is_direct"]),

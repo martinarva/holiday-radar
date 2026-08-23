@@ -206,6 +206,28 @@ _UNWATCHED = {"status": "unknown", "score": None, "rule": "",
               "dormant": False, "coverage_class": "covered_direct"}
 
 
+def layover_hotel_eur(cfg: Config, layover_overnight) -> float:
+    """Room a connection forces on the family, in EUR.
+
+    NB: not the origin's `hotel_eur` — that is the pre-departure room a RIX or
+    HEL start may need. A room in the connecting airport costs the same
+    whichever origin you left from.
+    """
+    if not layover_overnight:
+        return 0.0
+    return float((cfg.preferences or {}).get("layover_hotel_eur", 110))
+
+
+def effective_cost(cfg: Config, flights_eur, logistics_eur,
+                   layover_overnight=None) -> float:
+    """What the trip actually costs: fare + getting to the airport + any room
+    the itinerary forces. One definition, so the headline, the school ladder
+    and the date grid cannot disagree with each other.
+    """
+    return round((flights_eur or 0) + (logistics_eur or 0)
+                 + layover_hotel_eur(cfg, layover_overnight), 2)
+
+
 def _col(row, name, default=None):
     """sqlite3.Row has no .get, and older rows predate newer columns."""
     try:
@@ -228,11 +250,7 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
     # EUR 687 Tirana "deal" was 16h35 in Warsaw (see app/itinerary.py).
     max_lay = _col(row, "max_layover_h")
     lay_overnight = _col(row, "layover_overnight")
-    # NB: not og.hotel_eur — that is the pre-departure room a RIX/HEL start
-    # may need. A room in the connecting airport costs the same whichever
-    # origin you left from, so it has its own setting.
-    lay_hotel = (float((cfg.preferences or {}).get("layover_hotel_eur", 110))
-                 if lay_overnight else 0.0)
+    lay_hotel = layover_hotel_eur(cfg, lay_overnight)
     observed = datetime.fromisoformat(row["observed_at"])
     age_h = round((_now() - observed).total_seconds() / 3600, 1)
     verified = conn.execute("""
@@ -246,7 +264,7 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
         "flights_eur": fam,
         "logistics_eur": logistics,
         "layover_hotel_eur": lay_hotel or None,
-        "effective_eur": round((fam or 0) + logistics + lay_hotel, 2),
+        "effective_eur": effective_cost(cfg, fam, logistics, lay_overnight),
         "adult_eur": row["price_adult_eur"],
         "out_date": row["out_date"], "back_date": row["back_date"],
         "nights": nights,

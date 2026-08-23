@@ -67,3 +67,39 @@ def test_watches_sorted_and_shaped(client):
 def test_index_serves_html(client):
     r = client.get("/")
     assert r.status_code == 200 and "Holiday Radar" in r.text
+
+
+def test_ladder_and_grid_use_the_same_effective_cost_as_the_headline(tmp_path):
+    """One definition of "what the trip costs", or the page argues with itself.
+
+    The detail page showed a headline of EUR 797 (fare + a EUR 110 layover
+    hotel) while the price-vs-school ladder and the date grid printed EUR 687
+    for the same pair, under a column titled "effective family cost" — so the
+    1-school-day row claimed to save EUR 228 when it saved EUR 118.
+    """
+    from datetime import date
+
+    from app import db as dbm, opportunity as opp
+    from app.providers.base import Observation
+
+    cfg = load_config(ROOT / "config.yaml")
+    conn = dbm.init_db(tmp_path / "a.db")
+    o = Observation(origin="TLL", destination="TIA",
+                    out_date=date(2026, 10, 23), back_date=date(2026, 10, 30),
+                    price_adult_eur=171.75, source="google_flights",
+                    price_basis="family_quote", estimated_family_eur=687.0,
+                    is_direct=False,
+                    raw={"leg_details": [
+                        {"from": "TLL", "to": "WAW",
+                         "departure": "2026-10-23T18:25", "arrival": "2026-10-23T19:05"},
+                        {"from": "WAW", "to": "TIA",
+                         "departure": "2026-10-24T10:30", "arrival": "2026-10-24T12:40"}]})
+    dbm.upsert_observations(conn, "autumn-2026", [o], seats=4)
+    row = conn.execute("SELECT layover_overnight FROM observations").fetchone()
+    assert row["layover_overnight"] == 1, "the overnight wait must be recorded"
+
+    # the shared helper is what both the headline and the tables must call
+    assert opp.layover_hotel_eur(cfg, 1) == 110.0
+    assert opp.layover_hotel_eur(cfg, 0) == 0.0
+    assert opp.effective_cost(cfg, 687.0, 0, 1) == 797.0
+    assert opp.effective_cost(cfg, 687.0, 0, None) == 687.0
