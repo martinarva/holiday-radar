@@ -109,6 +109,7 @@ class Config:
     providers: dict
     scheduler: dict
     sampler: dict
+    preferences: dict
     base_dir: Path = field(default_factory=Path)
 
     def active_holidays(self) -> list[Holiday]:
@@ -194,5 +195,6 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         sampler={"google_budget": 0, "pairs_per_watch": 0, "workers": 6,
                  "audit_budget": 6, "verify_budget": 10, "pace_seconds": 0,
                  **(raw.get("sampler") or {})},
+        preferences={"school_days_ok": 3, **(raw.get("preferences") or {})},
         base_dir=base,
     )

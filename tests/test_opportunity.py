@@ -122,3 +122,31 @@ def test_best_pair_wins_over_cheapest_edge_pair(cfg, tmp_path):
     assert best["zero_school_pair"]["school_days"] == 0
     assert "cheapest_pair" not in best          # the winner IS the cheapest
     assert agp["cheapest_option"]["effective_eur"] == 780.0
+
+
+def test_school_penalty_is_gentle_up_to_the_family_limit(cfg):
+    """Owner: three school days either side are fine. The old 10/8/6/4 curve
+    let a EUR 796 option lose to a EUR 866 one on school days alone."""
+    from app.opportunity import _school_score
+    ok = cfg.preferences["school_days_ok"]
+    assert _school_score(0, ok) == 10.0
+    assert _school_score(3, ok) >= 9.0          # barely a dent
+    assert _school_score(6, ok) < _school_score(3, ok) - 3   # beyond: real cost
+
+
+def test_cheaper_tll_beats_dearer_zero_school_rix(cfg, tmp_path):
+    """The exact case the owner flagged: TLL EUR 796 with 3 school days must
+    now win over RIX EUR 866 effective with none."""
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    _seed(conn, cfg, [
+        ("TLL", "AGP", 796.0, False, date(2026, 10, 23), date(2026, 11, 3),
+         "airbaltic"),                                     # 3 school days
+        ("RIX", "AGP", 724.0, True, date(2026, 10, 25), date(2026, 11, 1),
+         "airbaltic"),                                     # +142 logistics, 0 sd
+    ])
+    ops = opp.build(cfg, conn, h, night=NOW.date().isoformat(), climate_cache={})
+    agp = next(o for o in ops if o["destination"] == "AGP")
+    by_origin = {o["origin"]: o for o in agp["origin_options"]}
+    assert by_origin["RIX"]["effective_eur"] > by_origin["TLL"]["effective_eur"]
+    assert agp["best_option"]["origin"] == "TLL"

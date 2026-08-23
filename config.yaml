@@ -5,6 +5,16 @@ currency: EUR
 
 passengers: {adults: 2, children: 2, infants: 0}
 
+# Family preferences that shape ranking (not filtering — everything stays
+# visible either way).
+preferences:
+  # School days we're comfortable taking, before or after the break. Up to
+  # this many barely affect the score; beyond it the penalty gets real.
+  # Owner 2026-08-23: "3 päeva on täiesti fine nii enne kui pärast" — with the
+  # old steep curve a EUR 796 Tallinn option lost to a EUR 866 Riga one purely
+  # on three school days.
+  school_days_ok: 3
+
 # Origin airports with honest logistics handicaps:
 #   effective = fare + handicap_fixed_eur + handicap_per_day_eur x trip days
 # (trip days = nights + 1). extra_time_h is DISPLAYED, never auto-priced.

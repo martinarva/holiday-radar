@@ -36,7 +36,11 @@ from app.watchlist import holiday_mid_month
 #     score = (W_VALUE·value + W_QUALITY·quality) × price_gate
 # where the gate collapses anything far above the buy threshold.
 W_VALUE, W_QUALITY = .45, .55
-W_CLIMATE, W_ITINERARY, W_SCHOOL, W_LOGISTICS = .30, .30, .25, .15
+# School weight cut from .25 to .15 (owner 2026-08-23): the old curve made a
+# €796 Tallinn option lose to a €866 Riga one on three school days alone,
+# which is not how this family decides. Directness and climate pick up the
+# freed weight.
+W_CLIMATE, W_ITINERARY, W_SCHOOL, W_LOGISTICS = .35, .35, .15, .15
 
 
 def price_gate(effective: float, notify: float | None) -> float:
@@ -83,8 +87,12 @@ def _itinerary_score(is_direct: bool | None, stops: int | None) -> float:
     return {0: 10.0, 1: 7.0}.get(stops, 4.0)
 
 
-def _school_score(days: int) -> float:
-    return {0: 10.0, 1: 8.0, 2: 6.0, 3: 4.0}.get(days, 2.0)
+def _school_score(days: int, ok: int = 3) -> float:
+    """Nearly flat up to the family's comfortable number of school days, then
+    a real penalty. (Was 10/8/6/4 — far too steep, see the weights above.)"""
+    if days <= ok:
+        return 10.0 - 0.33 * days          # 0→10.0, 3→9.0
+    return max(2.0, 9.0 - 1.5 * (days - ok))
 
 
 def _logistics_score(logistics: float) -> float:
@@ -198,7 +206,8 @@ def _score_option(cfg: Config, dst: str, opt: dict, clim: dict, tier) -> None:
     value = _value_score(cfg, dst, opt["effective_eur"], m.get("score"))
     quality = (W_CLIMATE * (clim["score"] or 0)
                + W_ITINERARY * _itinerary_score(opt["is_direct"], None)
-               + W_SCHOOL * _school_score(opt["school_days"])
+               + W_SCHOOL * _school_score(opt["school_days"],
+                                          cfg.preferences.get("school_days_ok", 3))
                + W_LOGISTICS * _logistics_score(opt["logistics_eur"]))
     gate = price_gate(opt["effective_eur"], tier.notify_eur if tier else None)
     cgate = CLIMATE_GATE.get(clim["status"], 0.5)
@@ -222,9 +231,13 @@ def _reasons(cfg: Config, opt: dict, clim: dict, market: dict) -> list[dict]:
                     "text": f"far above the €{tier.notify_eur:.0f} buy threshold"})
     out.append({"good": bool(opt["is_direct"]),
                 "text": "nonstop" if opt["is_direct"] else "requires a connection"})
-    out.append({"good": opt["school_days"] == 0,
-                "text": "no school missed" if opt["school_days"] == 0
-                        else f"{opt['school_days']} school day(s) missed"})
+    ok_days = cfg.preferences.get("school_days_ok", 3)
+    sd = opt["school_days"]
+    out.append({"good": sd <= ok_days,
+                "text": "no school missed" if sd == 0
+                        else f"{sd} school day(s) — within what we accept"
+                        if sd <= ok_days
+                        else f"{sd} school days missed"})
     if clim["status"] == "excluded":
         out.append({"good": False,
                     "text": f"climate ruled out for this month "
