@@ -1,0 +1,16 @@
+# Secrets
+.env
+
+# Runtime data (SQLite DB from E2 on) — keep the dir, not contents
+data/*
+!data/.gitkeep
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store

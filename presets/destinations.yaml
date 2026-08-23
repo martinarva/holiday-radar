@@ -1,0 +1,60 @@
+# Destination pool. Coordinates feed the Open-Meteo climate-normal lookups
+# (±0.2° is irrelevant at monthly resolution). Tier = typical nonstop time
+# from the Baltics: short <= 4.5 h, medium 4.5-7 h, long > 7 h / 1-stop.
+# The watchlist is DERIVED from this pool by climate rules — nothing here is
+# watched unconditionally. Notes flag family-relevant caveats honestly.
+
+destinations:
+  # --- Spain (owner must-haves first) ---
+  - {iata: AGP, name: "Málaga",          country: ES, lat: 36.68,  lon: -4.50,  tier: short,  tags: [beach, city]}
+  - {iata: ALC, name: "Alicante",        country: ES, lat: 38.28,  lon: -0.56,  tier: short,  tags: [beach]}
+  - {iata: PMI, name: "Palma de Mallorca", country: ES, lat: 39.55, lon: 2.74,  tier: short,  tags: [beach]}
+  - {iata: IBZ, name: "Ibiza",           country: ES, lat: 38.87,  lon: 1.37,   tier: short,  tags: [beach]}
+  - {iata: VLC, name: "Valencia",        country: ES, lat: 39.49,  lon: -0.48,  tier: short,  tags: [beach, city]}
+  - {iata: BCN, name: "Barcelona",       country: ES, lat: 41.30,  lon: 2.08,   tier: short,  tags: [city, beach]}
+  - {iata: SVQ, name: "Seville",         country: ES, lat: 37.42,  lon: -5.90,  tier: short,  tags: [city]}
+  # --- Canary Islands ---
+  - {iata: TFS, name: "Tenerife South",  country: ES, lat: 28.04,  lon: -16.57, tier: medium, tags: [beach]}
+  - {iata: LPA, name: "Gran Canaria",    country: ES, lat: 27.93,  lon: -15.39, tier: medium, tags: [beach]}
+  - {iata: ACE, name: "Lanzarote",       country: ES, lat: 28.95,  lon: -13.61, tier: medium, tags: [beach]}
+  - {iata: FUE, name: "Fuerteventura",   country: ES, lat: 28.45,  lon: -13.86, tier: medium, tags: [beach]}
+  # --- Portugal ---
+  - {iata: FAO, name: "Faro (Algarve)",  country: PT, lat: 37.01,  lon: -7.97,  tier: short,  tags: [beach]}
+  - {iata: LIS, name: "Lisbon",          country: PT, lat: 38.77,  lon: -9.13,  tier: short,  tags: [city]}
+  - {iata: OPO, name: "Porto",           country: PT, lat: 41.24,  lon: -8.68,  tier: short,  tags: [city]}
+  - {iata: FNC, name: "Madeira",         country: PT, lat: 32.69,  lon: -16.77, tier: medium, tags: [beach, nature]}
+  # --- Italy ---
+  - {iata: FCO, name: "Rome",            country: IT, lat: 41.80,  lon: 12.24,  tier: short,  tags: [city]}
+  - {iata: NAP, name: "Naples",          country: IT, lat: 40.88,  lon: 14.29,  tier: short,  tags: [city, beach]}
+  - {iata: CTA, name: "Catania (Sicily)", country: IT, lat: 37.47, lon: 15.07,  tier: short,  tags: [beach, city]}
+  - {iata: PMO, name: "Palermo (Sicily)", country: IT, lat: 38.18, lon: 13.10,  tier: short,  tags: [beach, city]}
+  - {iata: BGY, name: "Milan Bergamo",   country: IT, lat: 45.67,  lon: 9.70,   tier: short,  tags: [city], notes: "cheap LCC gateway, not warm off-season"}
+  # --- Greece ---
+  - {iata: ATH, name: "Athens",          country: GR, lat: 37.94,  lon: 23.94,  tier: short,  tags: [city, beach]}
+  - {iata: HER, name: "Heraklion (Crete)", country: GR, lat: 35.34, lon: 25.18, tier: short,  tags: [beach]}
+  - {iata: RHO, name: "Rhodes",          country: GR, lat: 36.41,  lon: 28.09,  tier: short,  tags: [beach]}
+  - {iata: CFU, name: "Corfu",           country: GR, lat: 39.60,  lon: 19.91,  tier: short,  tags: [beach]}
+  - {iata: KGS, name: "Kos",             country: GR, lat: 36.79,  lon: 27.09,  tier: short,  tags: [beach]}
+  # --- Cyprus & Malta ---
+  - {iata: LCA, name: "Larnaca",         country: CY, lat: 34.88,  lon: 33.62,  tier: short,  tags: [beach]}
+  - {iata: PFO, name: "Paphos",          country: CY, lat: 34.72,  lon: 32.49,  tier: short,  tags: [beach]}
+  - {iata: MLA, name: "Malta",           country: MT, lat: 35.86,  lon: 14.48,  tier: short,  tags: [beach, city]}
+  # --- Croatia ---
+  - {iata: SPU, name: "Split",           country: HR, lat: 43.54,  lon: 16.30,  tier: short,  tags: [beach, city]}
+  - {iata: DBV, name: "Dubrovnik",       country: HR, lat: 42.56,  lon: 18.27,  tier: short,  tags: [beach, city]}
+  # --- Türkiye ---
+  - {iata: AYT, name: "Antalya",         country: TR, lat: 36.90,  lon: 30.79,  tier: short,  tags: [beach]}
+  - {iata: IST, name: "Istanbul",        country: TR, lat: 41.26,  lon: 28.74,  tier: short,  tags: [city]}
+  # --- North Africa & Middle East ---
+  - {iata: RAK, name: "Marrakech",       country: MA, lat: 31.61,  lon: -8.04,  tier: medium, tags: [city]}
+  - {iata: AGA, name: "Agadir",          country: MA, lat: 30.33,  lon: -9.41,  tier: medium, tags: [beach]}
+  - {iata: HRG, name: "Hurghada",        country: EG, lat: 27.18,  lon: 33.80,  tier: medium, tags: [beach], notes: "visa on arrival"}
+  - {iata: SSH, name: "Sharm El Sheikh", country: EG, lat: 27.98,  lon: 34.39,  tier: medium, tags: [beach], notes: "visa on arrival"}
+  - {iata: DJE, name: "Djerba",          country: TN, lat: 33.88,  lon: 10.78,  tier: medium, tags: [beach]}
+  - {iata: DXB, name: "Dubai",           country: AE, lat: 25.25,  lon: 55.36,  tier: medium, tags: [city, beach]}
+  # --- Long-haul stretch (alert only on anomalously cheap fares) ---
+  - {iata: BKK, name: "Bangkok",         country: TH, lat: 13.68,  lon: 100.75, tier: long,   tags: [city]}
+  - {iata: HKT, name: "Phuket",          country: TH, lat: 8.11,   lon: 98.31,  tier: long,   tags: [beach]}
+  - {iata: ZNZ, name: "Zanzibar",        country: TZ, lat: -6.22,  lon: 39.22,  tier: long,   tags: [beach], notes: "malaria area — check prophylaxis with kids"}
+  - {iata: CPT, name: "Cape Town",       country: ZA, lat: -33.97, lon: 18.60,  tier: long,   tags: [city, nature], notes: "their summer = our winter; sea stays cold"}
+  - {iata: SID, name: "Sal (Cape Verde)", country: CV, lat: 16.74, lon: -22.95, tier: long,   tags: [beach]}

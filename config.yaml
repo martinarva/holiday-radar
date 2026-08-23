@@ -1,0 +1,42 @@
+# holiday-radar configuration. Country-agnostic: swap the presets to adapt.
+# Secrets (Travelpayouts token) live in .env, never here.
+
+currency: EUR
+
+passengers: {adults: 2, children: 2, infants: 0}
+
+# Origin airports with honest logistics handicaps. Ranking adds handicap_eur
+# to the fare; extra_time_h is DISPLAYED, never auto-converted to money.
+origins:
+  - {code: TLL, handicap_eur: 0,   extra_time_h: 0, note: "home airport"}
+  - {code: HEL, handicap_eur: 120, extra_time_h: 4, note: "ferry Tallinn-Helsinki, family round trip"}
+  - {code: RIX, handicap_eur: 90,  extra_time_h: 5, note: "~4.5 h drive each way; fuel + parking"}
+
+holidays:
+  preset: presets/holidays_ee.yaml
+  active: [autumn-2026, christmas-2026, spring-2027, autumn-2027]
+
+destinations:
+  preset: presets/destinations.yaml
+
+# Climate rules classify eligible / marginal / excluded; marginal = within the
+# tolerance band of a bound. Climate is a ranking signal — hard exclusion only
+# when strict: true.
+climate_rules:
+  beach:     {min_day_max_c: 23, min_sea_c: 21, max_rain_days: 8, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
+  warm_city: {min_day_max_c: 17, max_rain_days: 9, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
+
+# Family (2+2) round-trip totals, EUR, carry-on basis.
+tiers:
+  short:  {notify_eur: 400,  super_eur: 280}   # <= 4.5 h
+  medium: {notify_eur: 750,  super_eur: 550}   # 4.5-7 h (Canaries, Egypt, ...)
+  long:   {notify_eur: 1500, super_eur: 1100}  # > 7 h (stretch destinations)
+
+relative_deal: {vs_median_days: 60, ratio: 0.75}
+
+providers:
+  screen: [travelpayouts, ryanair]
+  verify: google_flights
+  verify_top_k: 3            # date-pair candidates sent to verify per watch
+
+scheduler: {timezone: Europe/Tallinn, screen_cron: "45 2 * * *", verify_top_n: 8}

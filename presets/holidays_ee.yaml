@@ -1,0 +1,92 @@
+# Estonian school holidays, set by ministry regulation through spring 2030.
+# Source: https://www.riigiteataja.ee/akt/119032025005 (and successor acts).
+# Summer breaks are intentionally absent (a v2 problem — the window is ~2.5
+# months and needs a different search mode).
+#
+# Flex semantics: departure window = [start - out_before, start + out_after],
+# return window = [end - back_before, back + back_after]; duration_min/max are
+# nights away. Christmas breaks get wider durations to keep valid pairs.
+
+defaults:
+  flex: {out_before: 3, out_after: 2, back_before: 2, back_after: 3}
+  duration_min: 6
+  duration_max: 11
+
+holidays:
+  - {id: autumn-2026,    name: "Autumn break 2026",       start: 2026-10-26, end: 2026-11-01}
+  - {id: christmas-2026, name: "Christmas break 2026/27", start: 2026-12-21, end: 2027-01-03, duration_min: 7, duration_max: 15}
+  - {id: winter-2027,    name: "Winter break 2027",       start: 2027-02-22, end: 2027-02-28}
+  - {id: spring-2027,    name: "Spring break 2027",       start: 2027-04-12, end: 2027-04-18}
+  - {id: autumn-2027,    name: "Autumn break 2027",       start: 2027-10-25, end: 2027-10-31}
+  - {id: christmas-2027, name: "Christmas break 2027/28", start: 2027-12-23, end: 2028-01-09, duration_min: 10, duration_max: 18}
+  - {id: winter-2028,    name: "Winter break 2028",       start: 2028-02-28, end: 2028-03-05}
+  - {id: spring-2028,    name: "Spring break 2028",       start: 2028-04-24, end: 2028-04-30}
+  - {id: autumn-2028,    name: "Autumn break 2028",       start: 2028-10-23, end: 2028-10-29}
+  - {id: christmas-2028, name: "Christmas break 2028/29", start: 2028-12-25, end: 2029-01-07, duration_min: 7, duration_max: 15}
+  - {id: winter-2029,    name: "Winter break 2029",       start: 2029-02-26, end: 2029-03-04}
+  - {id: spring-2029,    name: "Spring break 2029",       start: 2029-04-23, end: 2029-04-29}
+  - {id: autumn-2029,    name: "Autumn break 2029",       start: 2029-10-22, end: 2029-10-28}
+  - {id: christmas-2029, name: "Christmas break 2029/30", start: 2029-12-24, end: 2030-01-06, duration_min: 7, duration_max: 15}
+  - {id: winter-2030,    name: "Winter break 2030",       start: 2030-02-25, end: 2030-03-03}
+  - {id: spring-2030,    name: "Spring break 2030",       start: 2030-04-15, end: 2030-04-21}
+
+# Estonian public holidays (riigipühad) — used so the school-day counter
+# doesn't charge for days school is off anyway. Movable feasts computed:
+# Good Friday, Easter Sunday, Whitsun.
+public_holidays:
+  - 2026-01-01
+  - 2026-02-24
+  - 2026-04-03
+  - 2026-04-05
+  - 2026-05-01
+  - 2026-05-24
+  - 2026-06-23
+  - 2026-06-24
+  - 2026-08-20
+  - 2026-12-24
+  - 2026-12-25
+  - 2026-12-26
+  - 2027-01-01
+  - 2027-02-24
+  - 2027-03-26
+  - 2027-03-28
+  - 2027-05-01
+  - 2027-05-16
+  - 2027-06-23
+  - 2027-06-24
+  - 2027-08-20
+  - 2027-12-24
+  - 2027-12-25
+  - 2027-12-26
+  - 2028-01-01
+  - 2028-02-24
+  - 2028-04-14
+  - 2028-04-16
+  - 2028-05-01
+  - 2028-06-04
+  - 2028-06-23
+  - 2028-06-24
+  - 2028-08-20
+  - 2028-12-24
+  - 2028-12-25
+  - 2028-12-26
+  - 2029-01-01
+  - 2029-02-24
+  - 2029-03-30
+  - 2029-04-01
+  - 2029-05-01
+  - 2029-05-20
+  - 2029-06-23
+  - 2029-06-24
+  - 2029-08-20
+  - 2029-12-24
+  - 2029-12-25
+  - 2029-12-26
+  - 2030-01-01
+  - 2030-02-24
+  - 2030-04-19
+  - 2030-04-21
+  - 2030-05-01
+  - 2030-06-09
+  - 2030-06-23
+  - 2030-06-24

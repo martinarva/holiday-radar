@@ -1,0 +1,4 @@
+pyyaml>=6.0
+fast-flights            # Google Flights query builder + parser (verify stage); pin at E2
+typing_extensions>=4.0  # fast-flights omits this dependency on py3.13+
+pytest>=8.0
