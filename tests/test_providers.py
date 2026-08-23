@@ -115,3 +115,27 @@ def test_searchapi_parse_sorted_and_resilient():
     assert offers[0].legs == ("TLL-HEL", "HEL-AGP")
     assert offers[0].airlines == ("Finnair",)
     assert offers[0].source == "searchapi"
+
+
+SERPAPI_FIXTURE = {
+    "best_flights": [
+        {"price": 1312, "flights": [
+            {"airline": "Finnair",
+             "departure_airport": {"id": "TLL"},
+             "arrival_airport": {"id": "HEL"}},
+            {"airline": "Finnair",
+             "departure_airport": {"id": "HEL"},
+             "arrival_airport": {"id": "AGP"}}]},
+        {"price": "bad"},   # malformed entry must be skipped
+    ],
+}
+
+
+def test_serpapi_parse():
+    from app.providers.serpapi import parse_offers as serp_parse
+    offers = serp_parse(SERPAPI_FIXTURE, "tll", "agp",
+                        date(2026, 10, 26), date(2026, 11, 1))
+    assert len(offers) == 1
+    assert offers[0].price_total_eur == 1312.0
+    assert offers[0].legs == ("TLL-HEL", "HEL-AGP")
+    assert offers[0].source == "serpapi"

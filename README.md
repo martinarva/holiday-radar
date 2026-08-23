@@ -53,8 +53,10 @@ is proven (E0, Aug 2026):
   (E0 gate: 9% in-window coverage; E0.1: cheap hints don't correlate with
   bookable family prices — mostly virtual-interline artifacts). The adapter
   stays, strictly optional.
-- ✅ SearchApi.io hosted backup wired, cross-validated against fast-flights
-  (identical itinerary, identical price)
+- ✅ Hosted SERP-API backups wired for both vendors — SerpApi.com (free
+  250/mo, enough for the whole verify stage) and SearchApi.io — **triple
+  cross-validated** against fast-flights (identical itinerary, identical
+  price from all three)
 - 🔜 E1: carrier mini-gates (airBaltic, Norwegian, Finnair) → climate
   normals + watchlist derivation → E2 radar pipeline → E3 alerts/HA
 

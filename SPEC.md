@@ -167,7 +167,7 @@ Checked 2026-08-23:
 | **Travelpayouts Data API** (Aviasales cache) | official, token | free (affiliate account) | ~~stage A core~~ → **demoted by the E0 gate (2026-08-23): opportunistic hint layer only** (`transfers ≤ 1` filter) | measured: 9% in-window coverage on our market; cheapest entries often 2-stop self-transfer combos a family can't use |
 | **Ryanair fare finder** (`services-api.ryanair.com/farfnd/v4/roundTripFares`) | public JSON, unofficial | free, keyless | Stage A LCC supplement: cheapest RT across a whole window in one request; also "cheapest destinations from airport" | unofficial → may change; fail soft |
 | **fast-flights** (Google Flights, protobuf) | scraper library, maintained 2026 | free | **Stage B verify** on the exact date pair | ToS-gray wrt Google (personal, low volume); library dependency |
-| **Hosted SERP APIs** (SearchApi.io / SerpApi.com) | official, key | SearchApi: 100 one-time credits, ~$40/mo=10k · SerpApi: 100/mo free | stage-B backup; paid tier could carry the whole sampler | costs money at scale; same Google data fast-flights gets free |
+| **Hosted SERP APIs** (SerpApi.com / SearchApi.io) | official, key | SerpApi: 250/mo free (account-verified) · SearchApi: 100 one-time, ~$40/mo=10k | stage-B backup (SerpApi free alone covers verify); paid tier could carry the whole sampler | costs money at scale; same Google data fast-flights gets free |
 | ~~Amadeus Self-Service~~ | — | — | — | **closed to new signups 2026-07-17** — out |
 | ~~Kiwi Tequila~~, ~~Skyscanner~~ | — | — | — | partner-only for years — out |
 
@@ -194,16 +194,17 @@ Checked 2026-08-23:
   discovery-hint value): with no token, or with TP gone entirely, the radar
   runs identically.
 - **Hosted Google-Flights SERP APIs as the reliability backup.** Two vendors,
-  same product class ("SERP API" is a generic term): **SearchApi.io** (owner
-  has an account — 100 one-time free credits; paid ~$40/mo = 10k searches;
-  native fast-flights integration + our adapter, cross-validated live: it
-  returned the identical Finnair itinerary at the identical price as
-  fast-flights) and **SerpApi.com** (a separate company; 100 searches/month
-  recurring free; paid tiers pricier). Roles: occasional stage-B fallback on
-  the free credits; a paid tier (10k ≈ 330/day) would carry the entire
-  sampler + verify with ~2× headroom — a pure reliability upgrade via a
-  config provider swap, worth paying only if fast-flights maintenance ever
-  becomes a real burden.
+  same product class ("SERP API" is a generic term), owner has accounts and
+  wired adapters for BOTH, and results are **triple cross-validated** (SerpApi
+  = SearchApi = fast-flights returned the identical Finnair itinerary at the
+  identical family price):
+  - **SerpApi.com** — free plan verified at **250 searches/month recurring**
+    ≈ the whole stage-B verify budget (~8/day) on its own;
+  - **SearchApi.io** — ~100 one-time free credits; its paid tier (~$40/mo =
+    10k ≈ 330/day) would carry the entire sampler + verify with ~2× headroom
+    (SerpApi's paid tiers are ~6× pricier per search).
+  Both are pure reliability upgrades via a config provider swap — fast-flights
+  stays the free default; neither hosted key is ever a dependency.
 
 ### D. Verify, deal score and thresholds
 

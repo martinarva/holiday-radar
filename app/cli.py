@@ -124,6 +124,22 @@ def cmd_probe_searchapi(cfg: Config, args) -> None:
               f"{' '.join(o.legs)}")
 
 
+def cmd_probe_serpapi(cfg: Config, args) -> None:
+    from app.providers import serpapi
+    key = serpapi.key_from_env()
+    if not key:
+        _fail("SERPAPI_KEY not set (put it in .env)")
+    offers = serpapi.search_round_trip(
+        args.origin, args.dest,
+        date.fromisoformat(args.out), date.fromisoformat(args.back),
+        adults=cfg.passengers.adults, children=cfg.passengers.children,
+        key=key, currency=cfg.currency)
+    print(f"{len(offers)} offers via SerpApi (family total, 1 of 250/mo):")
+    for o in offers[:6]:
+        print(f"  {o.price_total_eur:8.0f} €  {'+'.join(o.airlines) or '?':<24.24s} "
+              f"{' '.join(o.legs)}")
+
+
 def cmd_diagnose_tp(cfg: Config, args) -> None:
     from app import benchmark
     from app.providers import travelpayouts as tp
@@ -174,6 +190,13 @@ def main(argv: list[str] | None = None) -> None:
     ps.add_argument("--out", required=True, help="YYYY-MM-DD")
     ps.add_argument("--back", required=True, help="YYYY-MM-DD")
 
+    pp = sub.add_parser("probe-serpapi",
+                        help="verify one date pair via SerpApi.com (1 of 250/mo)")
+    pp.add_argument("--origin", required=True)
+    pp.add_argument("--dest", required=True)
+    pp.add_argument("--out", required=True, help="YYYY-MM-DD")
+    pp.add_argument("--back", required=True, help="YYYY-MM-DD")
+
     args = p.parse_args(argv)
     cfg = load_config(args.config)
     try:
@@ -183,7 +206,8 @@ def main(argv: list[str] | None = None) -> None:
          "probe-travelpayouts": cmd_probe_tp,
          "benchmark": cmd_benchmark,
          "diagnose-tp": cmd_diagnose_tp,
-         "probe-searchapi": cmd_probe_searchapi}[args.cmd](cfg, args)
+         "probe-searchapi": cmd_probe_searchapi,
+         "probe-serpapi": cmd_probe_serpapi}[args.cmd](cfg, args)
     except ProviderError as e:
         _fail(str(e))
 
