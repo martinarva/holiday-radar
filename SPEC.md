@@ -180,10 +180,22 @@ Checked 2026-08-23:
 **Stage-A composition after the E0 gate (call C, ratified 2026-08-23):**
 - **Ryanair fare finder** — proven: whole-window cheapest per destination in
   one keyless request (RIX 21 / HEL 10 / TLL 6 destinations).
-- **Carrier low-fare calendars** (E1 opens with a spike on each): **airBaltic**
-  (the TLL/RIX workhorse), **Norwegian** (HEL → Canaries/Med), **Finnair**
-  (HEL long-haul & winter sun). Same shape as the Ryanair adapter: keyless
-  JSON their own sites use, honestly bookable fares.
+- **Carrier fare sources, admitted empirically (redesigned 2026-08-23):**
+  stage A is NOT "three big carrier adapters" — a carrier calendar is one
+  provider *type*, not the strategy. E1 opens with a **carrier recon** across
+  every airline flying TLL/HEL/RIX toward the pool (first batch: **Wizz Air**,
+  airBaltic, Norwegian, Finnair, LOT, Eurowings, SAS, Turkish, Pegasus,
+  Aegean, flydubai, Lufthansa/SWISS, KLM/AF), scoring each on: low-fare
+  calendar UI, JSON/GraphQL behind it, whether one query covers a date
+  window, RT vs one-way pricing, 2+2 passenger mix, ≤1-stop filtering, works
+  without a browser session, bot protection, and **how many of our watches it
+  would actually cover**. Adapters are then built in **ROI order** (coverage ÷
+  implementation cost) under an admission gate: *a carrier source is admitted
+  only if it provides materially cheaper discovery than Google sampling for
+  the same watches*. No airline besides proven Ryanair is an architectural
+  dependency; network carriers (LOT/Lufthansa class — connections galore, but
+  calendars poor for discovery) likely stay on the Google sampler. Live recon
+  status: [docs/carrier-recon.md](docs/carrier-recon.md).
 - **Google Flights polite sampling** (fast-flights) for watches the carriers
   don't cover: 2–3 rotating date pairs per watch per week — the full window
   gets swept over days while nightly volume stays low. The sampler is
@@ -367,10 +379,14 @@ The human decides ("€300 cheaper, but 9 h of extra logistics with two kids?").
   hint layer. **Final: TP adapter stays in the repo as strictly optional and
   default-off. The C call is closed with the discovery question answered,
   not skipped.**
-- **E1 — foundation:** opens with a **carrier mini-gate** for airBaltic,
-  Norwegian and Finnair — `endpoint exists → window query possible → prices
-  sane → parser test → adapter in`. A carrier that fails the gate routes its
-  coverage to the Google sampler; we do not place another TP-style
+- **E1 — foundation:** opens with a **carrier recon, not adapter-building**:
+  survey every carrier flying TLL/HEL/RIX toward the pool (Wizz Air heads the
+  first batch — LCC calendars are the likeliest wins), score on the §4C
+  criteria, rank by ROI (watch coverage ÷ implementation cost), and admit a
+  source only past the gate: *materially cheaper discovery than Google
+  sampling*. For each admitted source the mini-gate still applies —
+  `endpoint exists → window query → sane prices → parser test → adapter in`;
+  failures route to the sampler. We do not place another TP-style
   architectural bet on an unproven source. Then: config model, holiday
   presets 2026–2030, destination pool (~40–70), Open-Meteo normals,
   watchlist derivation + a preview ("what I would watch and why" — climate
@@ -434,7 +450,14 @@ Confirmed 2026-08-23 (owner):
    before its adapter lands; the Google sampler is coverage-aware from the
    start; Travelpayouts is an optional hint provider — not a fallback, not a
    dependency.
-10. **External review accepted (2026-08-23):** provider-agnostic observation
+10. **Carrier strategy redesigned (owner + review, 2026-08-23):** supersedes
+    the fixed airline list in #9. Stage A = *proven carrier fare sources +
+    coverage-aware Google sampling*; carriers are discovered via a full
+    TLL/HEL/RIX recon and admitted empirically in ROI order under the gate
+    "materially cheaper discovery than Google sampling". Only Ryanair is
+    proven; Wizz Air heads the first recon batch; network carriers likely
+    remain on the sampler. Recon matrix: docs/carrier-recon.md.
+11. **External review accepted (2026-08-23):** provider-agnostic observation
    model with `days_to_departure` stored from day one; top-K date pairs sent
    to verify; three-state climate (eligible/marginal/excluded) with a 0–10
    climate score as a ranking signal (hard filter opt-in); verification
