@@ -102,6 +102,20 @@ full-response md5 diff, plus a no-`outboundDate` control:
 - Side finding: airBaltic flies **TLL→TFS direct** seasonally (e.g. €214.99
   on 2026-10-30); TLL is not purely via-RIX for the pool after all.
 
+### E1-E dry-run session (2026-08-23) — adapter-relevant findings
+
+- **`/fsf/inbound` CAPS its date range (~1 month per call)** while
+  `/fsf/outbound` happily returns a year: a long-span inbound request
+  silently returned 22 days vs outbound's 279. Nightly shape therefore:
+  1 outbound GET per (origin,destination) + 1 inbound GET per
+  (origin,destination,holiday window) ≈ 312 GETs/night at current scale.
+- **Sales horizon ≈ 11 months**: autumn-2027 windows have zero priced days
+  on every origin — such watches are DORMANT (no fetches, no Google budget)
+  until the holiday enters the horizon.
+- Seasonal schedules matter: e.g. RIX→TFS has no priced October days (the
+  Canaries winter program starts later) — a technically-in-network route can
+  still be blind for a specific holiday. This is real signal, not a bug.
+
 Honesty note on the admitted sources: both are unofficial-but-open JSON
 endpoints the carriers' own sites use. Checked 2026-08-23: neither is
 disallowed by robots.txt (airbaltic.com disallows only `/*?language=*`;

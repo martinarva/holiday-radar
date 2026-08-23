@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import date
+from pathlib import Path
 
 from app.config import Config, load_config
 from app.providers import ProviderError
@@ -169,6 +170,31 @@ def cmd_diagnose_tp(cfg: Config, args) -> None:
                           verify_sample=args.verify_sample)
 
 
+def cmd_climate_fetch(cfg: Config, args) -> None:
+    from app import climate
+    cache = climate.ensure_normals(cfg)
+    month = args.month
+    print(f"\nclimate for month {month} (t_max °C / rain days / sea °C → status, score, rule):")
+    for d in cfg.destinations:
+        n = (cache.get(d.iata) or {}).get(str(month)) or {}
+        status, score, rule = climate.best_for_month(cfg, d.iata, month, cache)
+        print(f"  {d.iata} {d.name:<22.22s} {str(n.get('t_max')):>5}° "
+              f"{str(n.get('rain_days')):>4}d {str(n.get('sea_c')):>5}° "
+              f"→ {status:<8s} {score:>4} ({rule})")
+
+
+def cmd_dry_run(cfg: Config, args) -> None:
+    from app import dryrun
+    summary, md = dryrun.run(cfg)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(md)
+    print(f"\n=== SUMMARY ===")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+    print(f"\nreport written: {out}")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="holiday-radar")
     p.add_argument("--config", default="config.yaml")
@@ -196,6 +222,14 @@ def main(argv: list[str] | None = None) -> None:
     pt.add_argument("--origin", required=True)
     pt.add_argument("--dest", required=True)
     pt.add_argument("--holiday", required=True)
+
+    pc = sub.add_parser("climate-fetch",
+                        help="fetch/cache Open-Meteo normals + show a month")
+    pc.add_argument("--month", type=int, default=10)
+
+    pdr = sub.add_parser("dry-run",
+                         help="E1-E milestone: full stage-A pass + coverage report")
+    pdr.add_argument("--out", default="docs/dryrun-report.md")
 
     pb = sub.add_parser("benchmark", help="E0 gate: TP coverage + error vs verify")
     pb.add_argument("--max-dest", type=int, default=15)
@@ -227,6 +261,8 @@ def main(argv: list[str] | None = None) -> None:
         {"holidays": cmd_holidays,
          "probe-ryanair": cmd_probe_ryanair,
          "probe-airbaltic": cmd_probe_airbaltic,
+         "climate-fetch": cmd_climate_fetch,
+         "dry-run": cmd_dry_run,
          "probe-google": cmd_probe_google,
          "probe-travelpayouts": cmd_probe_tp,
          "benchmark": cmd_benchmark,
