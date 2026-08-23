@@ -243,3 +243,46 @@ def test_sampler_state_survives_and_advances(cfg, tmp_path):
                 log=lambda *_: None, rng=random.Random(6))
     conn = dbm.init_db(dbfile)
     assert all(s["rotation_idx"] == 2 for s in dbm.sampler_state_all(conn).values())
+
+
+def test_ryanair_candidates_recorded_as_market_context_not_verified(cfg, tmp_path):
+    """Google does not index Ryanair (proven live) — a Ryanair candidate
+    checked there yields the cheapest NON-Ryanair option, so it must never be
+    stored as flight-verified."""
+    dbfile = tmp_path / "r.db"
+    h = cfg.holiday("autumn-2026")
+    out, back = next(h.date_pairs())
+    payload = _fake_collect(cfg, n_blind=0, n_covered=1, dormant=0)(cfg)
+    r = payload["relevant"][0]
+    r.destination = "BCN"
+    r.bt_candidates = []
+    r.ry_pair = _obs("RIX", "BCN", out, back, 117.0, source="ryanair")
+    run_nightly(cfg, dbfile, google_budget=0, audit_budget=0, verify_budget=3,
+                collect=lambda c, log=None, sleep_s=0: payload,
+                google_search=_fake_google(price=998.0), sleep_s=0,
+                log=lambda *_: None, rng=random.Random(2))
+    conn = dbm.init_db(dbfile)
+    row = conn.execute("SELECT * FROM verifications").fetchone()
+    assert row["level"] == "market-context"
+    assert "NOT a verification" in row["reason"]
+    assert row["price_total_eur"] == 998.0
+    assert row["indicative_family_eur"] == pytest.approx(468.0)
+
+
+def test_airbaltic_candidate_still_flight_verified(cfg, tmp_path):
+    """airBaltic IS on Google, so its candidates verify normally."""
+    dbfile = tmp_path / "r.db"
+    h = cfg.holiday("autumn-2026")
+    out, back = next(h.date_pairs())
+    payload = _fake_collect(cfg, n_blind=0, n_covered=1, dormant=0)(cfg)
+    r = payload["relevant"][0]
+    r.destination = "BCN"
+    r.bt_candidates = [_obs("RIX", "BCN", out, back, 120.0)]
+    r.ry_pair = None
+    run_nightly(cfg, dbfile, google_budget=0, audit_budget=0, verify_budget=3,
+                collect=lambda c, log=None, sleep_s=0: payload,
+                google_search=_fake_google(price=505.0), sleep_s=0,
+                log=lambda *_: None, rng=random.Random(2))
+    conn = dbm.init_db(dbfile)
+    row = conn.execute("SELECT * FROM verifications").fetchone()
+    assert row["level"] == "flight-verified" and row["price_total_eur"] == 505.0

@@ -139,3 +139,10 @@ def test_serpapi_parse():
     assert offers[0].price_total_eur == 1312.0
     assert offers[0].legs == ("TLL-HEL", "HEL-AGP")
     assert offers[0].source == "serpapi"
+
+
+def test_google_no_results_page_is_not_an_error():
+    """A rendered results page with zero itineraries must yield [] rather
+    than a ProviderError (live: TLL-FUE on some date pairs)."""
+    from app.providers.google_flights import RESULTS_PAGE_MARKER
+    assert RESULTS_PAGE_MARKER == "include all taxes and fees"

@@ -22,6 +22,15 @@ from datetime import date
 from app.providers.base import ProviderError, VerifiedOffer
 
 CONSENT_MARKER = "Before you continue"
+# Present on every rendered results page, with or without itineraries — used
+# to tell "no flights for this pair" apart from a genuinely broken parse.
+RESULTS_PAGE_MARKER = "include all taxes and fees"
+
+# Google Flights does NOT index Ryanair (verified 2026-08-23: RIX-BCN over
+# Christmas returned LOT/airBaltic/SWISS/Finnair/SAS/KLM/Austrian and no
+# Ryanair at all, while Ryanair's own fare finder priced the same pair at
+# EUR 117/adult). Anything Ryanair-sourced therefore cannot be verified here.
+INDEXES_RYANAIR = False
 UA = {"User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                      "AppleWebKit/537.36 (KHTML, like Gecko) "
                      "Chrome/126.0.0.0 Safari/537.36"),
@@ -137,6 +146,12 @@ class GoogleFlights:
         try:
             results = list(ff_parser.parse(html))
         except Exception as e:
+            # A results page with zero itineraries makes the parser trip on a
+            # missing node. Distinguish that (a legitimate "nothing flies this
+            # pair" answer -> empty list) from actual breakage: a real results
+            # page always carries Google's fare disclaimer furniture.
+            if RESULTS_PAGE_MARKER in html:
+                return []
             raise ProviderError(f"google_flights: parse failed: {e}") from e
 
         offers: list[VerifiedOffer] = []

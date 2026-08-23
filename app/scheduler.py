@@ -246,6 +246,11 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             candidates.append((o.estimated_family_eur, r, o))
     candidates.sort(key=lambda t: t[0])
 
+    # Verifiable candidates first: Google cannot price Ryanair (proven
+    # 2026-08-23), so a Ryanair candidate checked here yields the cheapest
+    # NON-Ryanair alternative — useful market context, never a verification.
+    candidates.sort(key=lambda t: (t[2].source == "ryanair", t[0]))
+
     used_verify = 0
     for fam, r, o in candidates:
         if used_verify >= verify_budget:
@@ -255,6 +260,28 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 o.out_date.isoformat(), o.back_date.isoformat()):
             continue
         reason = f"indicative family {fam:.0f} <= 1.25 x notify"
+        if o.source == "ryanair":
+            used_verify += 1
+            try:
+                offers = google_search(r.origin, r.destination,
+                                       o.out_date, o.back_date)
+            except ProviderError as e:
+                errors.append(f"google market-context {r.origin}-{r.destination}: {e}")
+                continue
+            best = offers[0] if offers else None
+            dbm.insert_verification(
+                conn, holiday_id=r.holiday_id, origin=r.origin,
+                destination=r.destination, out_date=o.out_date.isoformat(),
+                back_date=o.back_date.isoformat(),
+                price_total_eur=best.price_total_eur if best else None,
+                airlines=json.dumps(list(best.airlines)) if best else "[]",
+                legs=json.dumps(list(best.legs)) if best else "[]",
+                level="market-context",
+                reason=(reason + "; source=ryanair, not on Google — this is the "
+                        "cheapest non-Ryanair alternative, NOT a verification"),
+                indicative_family_eur=fam)
+            time.sleep(sleep_s)
+            continue
         if o.source == "google_flights":
             # the discovery/audit quote already IS the exact family total
             used_verify += 1

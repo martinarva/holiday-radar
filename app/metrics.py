@@ -82,12 +82,19 @@ def audit_deltas(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
     out = []
     for r in rows:
         g, c = r["google_eur"], r["carrier_eur"]
+        # Google does not index Ryanair, so a Ryanair-vs-Google delta measures
+        # the non-Ryanair market, not provider bias. Only airBaltic (which IS
+        # on Google) yields a comparable delta.
+        comparable = r["carrier"] != "ryanair"
         out.append({
             "holiday_id": r["holiday_id"], "origin": r["origin"],
             "destination": r["destination"], "night": r["observed_night"],
             "out_date": r["out_date"], "back_date": r["back_date"],
             "carrier": r["carrier"], "price_basis": r["price_basis"],
             "carrier_eur": c, "google_eur": g,
+            "comparable": comparable,
+            "meaning": ("provider bias" if comparable
+                        else "cheapest non-Ryanair alternative"),
             "delta_eur": round(g - c, 2) if None not in (g, c) else None,
             "delta_pct": (round((g - c) / c * 100, 1)
                           if c not in (None, 0) and g is not None else None),

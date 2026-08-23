@@ -276,6 +276,13 @@ Checked 2026-08-23:
   the Sunday digest ("RIX→AGP €612 family · 18% below baseline · market
   score 8.7 · buy threshold €400 — not reached"). Don't raise the
   thresholds to match the market — that would invert the product.
+- **Cross-source limit (found live 2026-08-23):** Google Flights does not
+  index Ryanair, so a Ryanair-sourced candidate checked on Google yields the
+  cheapest *non-Ryanair* itinerary — recorded as `market-context`, never as
+  a verification (details in docs/carrier-recon.md). Ryanair fares are
+  verifiable only through Ryanair itself; until that exists, a Ryanair
+  candidate stays `indicative` and the Google number is shown beside it as
+  what the alternative market costs.
 - **Verification levels** instead of a boolean:
   `indicative` (stage-A cache) → `flight-verified` (stage B confirmed the
   itinerary price) → `bookable-verified` (v2: bags, seats-together, checkout

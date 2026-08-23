@@ -102,6 +102,35 @@ full-response md5 diff, plus a no-`outboundDate` control:
 - Side finding: airBaltic flies **TLL→TFS direct** seasonally (e.g. €214.99
   on 2026-10-30); TLL is not purely via-RIX for the pool after all.
 
+### E2-B first live nightly (2026-08-23) — MAJOR finding
+
+**Google Flights does not index Ryanair.** Verified directly: RIX→BCN over
+Christmas returns LOT €998, airBaltic+SWISS €1124, LOT+Austrian €1206, SAS
+€1309, Finnair €1322, airBaltic+KLM €1935 — seven carriers, **zero Ryanair**
+— while Ryanair's own fare finder prices the same pair at €117/adult
+(≈€468 family). Consequences, now encoded in the system:
+
+- **A Ryanair candidate can never be "verified" on Google.** Such a check
+  answers a different question — "what does the cheapest non-Ryanair
+  itinerary cost" — so it is stored as `level = market-context`, never
+  `flight-verified`, with the distinction spelled out in the row's reason.
+- The two rows produced by the first nightly (RIX→BCN, RIX→MLA) were
+  retro-labelled accordingly.
+- The **audit delta is only comparable for airBaltic** (which *is* on
+  Google); for Ryanair rows `comparable=false` and the meaning is "cheapest
+  non-Ryanair alternative".
+- Verifying Ryanair properly needs Ryanair's own booking flow; their
+  availability API returns HTTP 409 without a session, and per the admission
+  rule we are not building something fragile for it right now.
+- Silver lining: **Ryanair adapter + Google sampler are complementary, not
+  overlapping** — together they cover the market rather than duplicating it.
+
+Second finding: Google returns a normal results page with *zero* itineraries
+for pairs nothing flies (e.g. TLL→FUE on some dates), which made the
+fast-flights parser raise. That is now detected via the fare-disclaimer
+marker and returned as an empty result instead of a provider error (21 of
+the first night's 23 "errors" were this).
+
 ### E1-E dry-run session (2026-08-23) — adapter-relevant findings
 
 - **`/fsf/inbound` CAPS its date range (~1 month per call)** while
