@@ -243,7 +243,7 @@ def cmd_test_alert(cfg: Config, args) -> None:
               "the radar runs fine without alerts, it just sends none.")
         return
     host = url.split("/api/webhook/")[0]
-    payload = {
+    sample = {
         "kind": notify.KIND_BUY, "title": "Malaga €352 — good deal for "
         "Autumn break 2026", "holiday_id": "autumn-2026",
         "holiday": "Autumn break 2026", "destination": "AGP",
@@ -256,8 +256,11 @@ def cmd_test_alert(cfg: Config, args) -> None:
         "deal": "good", "deal_label": "good deal", "climate_c": 23.0,
         "detail": ("TLL · nonstop · Ryanair · 2026-10-26 → 2026-11-01 "
                    "(6 nights) · 23°C typical · no school missed"),
-        "confidence": "indicative", "previous_eur": 430.0, "test": True,
+        "confidence": "indicative", "previous_eur": 430.0,
     }
+    # Wrap it exactly as the 07:00 slot does — a test that does not match
+    # production teaches you the wrong template.
+    payload = {**notify.digest([sample]), "test": True}
     print(f"  POST {host}/api/webhook/***")
     try:
         print(f"  HTTP {notify.post(url, payload)} — check Home Assistant")

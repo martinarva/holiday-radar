@@ -156,6 +156,13 @@ stale — otherwise a €12 wobble on a €2000 trip would buzz every morning.
 docker exec holiday-radar-web python -m app.cli test-alert
 ```
 
+The live instance already has this wired: automation
+`automation.holiday_radar_lennupakkumised` (id `holiday_radar_deal`) with a
+webhook trigger, notifying `notify.mobile_app_martins_iphone` and deep-linking
+to `radar.arvahome.org`. Because Home Assistant and the radar share the docker
+host, `.env` points at the LAN address (`http://192.168.1.35:8123/api/webhook/...`),
+which keeps `local_only: true` valid on the trigger.
+
 ### The payload
 
 ```yaml
@@ -176,8 +183,10 @@ automation:
             url: "https://<radar-host>/#/h/{{ trigger.json.best.holiday_id }}/{{ trigger.json.best.destination }}"
 ```
 
-`trigger.json` carries `count`, `title`, `headline`, `summary`, `best` (the
-cheapest find, fully described) and `alerts` (all of them). Each entry has
+`trigger.json` is **always the digest shape**, including from `test-alert`,
+so the template you test is the template that runs: `count`, `title`,
+`headline`, `summary`, `best` (the cheapest find, fully described) and
+`alerts` (all of them). Each entry has
 `effective_eur`, `flights_eur`, `logistics_eur`, `layover_hotel_eur`,
 `out_date`, `back_date`, `nights`, `origin`, `airlines`, `is_direct`,
 `layover`, `layover_overnight`, `times`, `school_days`, `climate_c`, `deal`,
