@@ -675,3 +675,27 @@ Confirmed 2026-08-23 (owner):
     because Wizz opens schedules further ahead than the legacy carriers.
     Standing rule: *"the sampler covers it" is a claim to verify against
     stored offers, not an assumption to rest a rejection on.*
+
+18. **Deal alerts, and recalibrating the buy thresholds (2026-08-23):**
+    alerts go to a Home Assistant webhook. The design problem is silence, not
+    delivery: with ~45 destinations × 4 holidays repriced nightly, anything
+    firing on "this is cheap" fires every night and gets muted. So three
+    rules, each a *change* of state — a crossed buy threshold, a new all-time
+    low, a new top pick — deduplicated against what was last announced, with
+    a re-alert needing to beat it by both a percentage and an absolute
+    amount. **Deciding and delivering are separate:** the 02:45 cycle queues,
+    a 07:00 slot posts the queue as one digest (owner's request).
+    Calibrating them exposed a stale assumption. The promo-hunt thresholds
+    (short €400 / medium €750 / long €1500, decision #15) were set before any
+    real prices existed. Against 101 priced opportunities they yielded **zero
+    "good" deals and 93 "above usual budget"** — the alerting would never
+    have fired and the UI called almost everything unaffordable. Raised to
+    650/1100/1800 (exceptional 480/850/1400), anchored to what the family
+    would be pleased to pay, **not** to a market percentile: a percentile put
+    "good" long-haul at €2660 simply because that was the cheapest long-haul
+    on offer, which is exactly the tier-relative trap decision #16 removed
+    from the ranking. Marked provisional in `config.yaml` — recalibrate once
+    a few weeks of history exist. Raising them does weaken `price_gate`, so
+    it was checked: the dearest option in any holiday's top three is €1063,
+    and absolute affordability in the value axis now carries the discipline
+    the gate used to.

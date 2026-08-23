@@ -94,9 +94,18 @@ climate_rules:
 
 # Family (2+2) round-trip totals, EUR, carry-on basis.
 tiers:
-  short:  {notify_eur: 400,  super_eur: 280}   # <= 4.5 h
-  medium: {notify_eur: 750,  super_eur: 550}   # 4.5-7 h (Canaries, Egypt, ...)
-  long:   {notify_eur: 1500, super_eur: 1100}  # > 7 h (stretch destinations)
+  # PROVISIONAL, recalibrate once a few weeks of history exist (owner
+  # 2026-08-23). The original promo-hunt levels (400/750/1500) were set before
+  # any real prices were in: against 101 priced opportunities they produced
+  # ZERO "good" deals and 93 "above usual budget", so the alerting would never
+  # have fired and the UI labelled almost everything unaffordable. These are
+  # anchored to what this family would actually be pleased to pay rather than
+  # to a percentile of the market — a percentile would call EUR 2660 long-haul
+  # a good deal purely because it is the cheapest long-haul on offer, which is
+  # the tier-relative trap the ranking model already had to unlearn.
+  short:  {notify_eur: 650,  super_eur: 480}   # <= 4.5 h
+  medium: {notify_eur: 1100, super_eur: 850}   # 4.5-7 h (Canaries, Egypt, ...)
+  long:   {notify_eur: 1800, super_eur: 1400}  # > 7 h (stretch destinations)
 
 relative_deal: {vs_median_days: 60, ratio: 0.75}
 

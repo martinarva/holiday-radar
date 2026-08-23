@@ -60,8 +60,13 @@ def test_spanish_must_haves_present(cfg):
 
 
 def test_tiers_and_climate_rules(cfg):
-    assert cfg.tiers["short"].notify_eur == 400
-    assert cfg.tiers["long"].super_eur == 1100
+    # Values are tuned from live data and will move again; assert the
+    # RELATIONSHIPS that must hold, not this week's numbers.
+    for name in ("short", "medium", "long"):
+        t = cfg.tiers[name]
+        assert 0 < t.super_eur < t.notify_eur, f"{name}: exceptional must beat good"
+    assert (cfg.tiers["short"].notify_eur < cfg.tiers["medium"].notify_eur
+            < cfg.tiers["long"].notify_eur), "further should cost more"
     beach = cfg.climate_rules["beach"]
     assert beach.min_sea_c == 21 and beach.strict is False
 
