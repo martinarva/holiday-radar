@@ -2,6 +2,7 @@
 to pin down (they held live on 2026-08-23: bt + ry - overlap = covered =
 direct + 1stop; zero-school-day counting). Pipeline refactors must not
 silently change coverage semantics."""
+import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -116,3 +117,45 @@ def test_upsert_is_per_night_not_duplicating(cfg, tmp_path):
     n = conn.execute("SELECT COUNT(*) c FROM observations").fetchone()["c"]
     assert n == 2
     assert dbm.latest_night(conn) == "2026-08-24"
+
+
+def _offer(dest, price, legs, airlines):
+    from app.providers.base import VerifiedOffer
+    return VerifiedOffer(origin="RIX", destination=dest,
+                         out_date=date(2026, 10, 25), back_date=date(2026, 11, 1),
+                         price_total_eur=price, airlines=airlines, legs=legs,
+                         source="google_flights", observed_at=NOW)
+
+
+def test_offers_store_every_itinerary_ranked(cfg, tmp_path):
+    """Owner request: keep all airline/routing combinations, not just the
+    cheapest — a Google query returns 6-10 of them."""
+    conn = dbm.init_db(tmp_path / "o.db")
+    offers = [
+        _offer("AGP", 1408.0, ("RIX-HEL", "HEL-AGP", "AGP-HEL", "HEL-RIX"),
+               ("Finnair",)),
+        _offer("AGP", 998.0, ("RIX-BCN", "BCN-RIX"), ("LOT",)),
+        _offer("AGP", 1124.0, ("RIX-ZRH", "ZRH-AGP", "AGP-RIX"),
+               ("Air Baltic", "SWISS")),
+    ]
+    n = dbm.upsert_offers(conn, "autumn-2026", offers, seats=4, role="discovery")
+    assert n == 3
+    rows = dbm.offers_for_watch(conn, "autumn-2026", "RIX", "AGP")
+    # ranked cheapest-first, airline combos and stop counts preserved
+    assert [r["offer_rank"] for r in rows] == [0, 1, 2]
+    assert [r["price_total_eur"] for r in rows] == [998.0, 1124.0, 1408.0]
+    assert json.loads(rows[0]["airlines"]) == ["LOT"]
+    assert rows[0]["is_direct"] == 1 and rows[0]["stops"] == 0
+    assert json.loads(rows[2]["airlines"]) == ["Finnair"]
+    assert rows[2]["stops"] == 2
+    assert rows[0]["price_adult_eur"] == pytest.approx(249.5)
+
+
+def test_offers_rerun_same_night_updates_not_duplicates(cfg, tmp_path):
+    conn = dbm.init_db(tmp_path / "o.db")
+    dbm.upsert_offers(conn, "autumn-2026", [_offer("AGP", 1000.0,
+                      ("RIX-AGP", "AGP-RIX"), ("LOT",))], seats=4)
+    dbm.upsert_offers(conn, "autumn-2026", [_offer("AGP", 950.0,
+                      ("RIX-AGP", "AGP-RIX"), ("LOT",))], seats=4)
+    rows = dbm.offers_for_watch(conn, "autumn-2026", "RIX", "AGP")
+    assert len(rows) == 1 and rows[0]["price_total_eur"] == 950.0

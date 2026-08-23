@@ -196,6 +196,10 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             errors.append(f"google discovery {r.origin}-{r.destination}: {e}")
             continue
         if offers:
+            # keep the cheapest as the watch's observation AND every returned
+            # itinerary (airlines, routings, stop counts) in `offers`
+            dbm.upsert_offers(conn, r.holiday_id, offers, seats,
+                              role="discovery")
             o = offer_to_observation(cfg, offers[0])
             dbm.upsert_observations(conn, r.holiday_id, [o], seats,
                                     role="discovery")
@@ -220,6 +224,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             errors.append(f"google audit {r.origin}-{r.destination}: {e}")
             continue
         if offers:
+            dbm.upsert_offers(conn, r.holiday_id, offers, seats, role="audit")
             o = offer_to_observation(cfg, offers[0])
             dbm.upsert_observations(conn, r.holiday_id, [o], seats,
                                     role="audit")
@@ -268,6 +273,9 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             except ProviderError as e:
                 errors.append(f"google market-context {r.origin}-{r.destination}: {e}")
                 continue
+            if offers:
+                dbm.upsert_offers(conn, r.holiday_id, offers, seats,
+                                  role="verification")
             best = offers[0] if offers else None
             dbm.insert_verification(
                 conn, holiday_id=r.holiday_id, origin=r.origin,
@@ -302,6 +310,9 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
         except ProviderError as e:
             errors.append(f"google verify {r.origin}-{r.destination}: {e}")
             continue
+        if offers:
+            dbm.upsert_offers(conn, r.holiday_id, offers, seats,
+                              role="verification")
         best = offers[0] if offers else None
         dbm.insert_verification(
             conn, holiday_id=r.holiday_id, origin=r.origin,

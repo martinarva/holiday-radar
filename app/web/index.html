@@ -35,6 +35,11 @@
   .wrap { overflow-x:auto }
   h3.origin { font-size:13.5px; margin:14px 0 2px; border-top:1px dashed var(--line);
               padding-top:10px } h3.origin b{color:var(--acc)}
+  .lnk { color:var(--acc); cursor:pointer; text-decoration:underline dotted }
+  tr.offers > td { background:#141d1a; padding:6px 10px 10px 26px }
+  table.sub { width:auto; min-width:60%; font-size:12.5px }
+  table.sub th { background:transparent; padding:3px 8px }
+  table.sub td { padding:3px 8px }
   button { background:#22302a; color:var(--ink); border:1px solid var(--line);
            border-radius:6px; padding:2px 10px; cursor:pointer; font:inherit;
            font-size:12px }
@@ -141,7 +146,36 @@ async function load(){
       <div class="wrap" id="t-${hol.id}"></div>`;
     root.appendChild(div);
   }
+  // click a destination cell to expand every stored itinerary for that watch
   root.addEventListener("click", async ev => {
+    const tr = ev.target?.closest?.("tr[data-offers]");
+    if(tr && ev.target.classList.contains("lnk")){
+      const nxt = tr.nextElementSibling;
+      if(nxt && nxt.classList.contains("offers")){ nxt.remove(); return; }
+      const [hid, og, dst] = tr.dataset.offers.split("|");
+      const offers = await j(`/api/offers?holiday=${hid}&origin=${og}&destination=${dst}`);
+      const row = document.createElement("tr");
+      row.className = "offers";
+      row.innerHTML = `<td colspan="11">${
+        offers.length ? `<table class="sub"><tr><th>#</th><th>price</th><th>/adult</th>
+          <th>airlines</th><th>routing</th><th>stops</th><th>pair</th><th>role</th></tr>` +
+          offers.map(o => `<tr>
+            <td class="mut">${o.rank + 1}</td>
+            <td class="num fam">${money(o.price_total_eur)}</td>
+            <td class="num mut">${money(o.price_adult_eur)}</td>
+            <td>${o.airlines.join(" + ") || "?"}</td>
+            <td class="mut">${o.legs.join("  ")}</td>
+            <td>${o.is_direct ? '<span class="direct">direct</span>'
+                              : `<span class="stop">${o.stops}</span>`}</td>
+            <td class="mut">${o.out_date}→${o.back_date}</td>
+            <td><span class="tag">${o.source}/${o.role}</span></td>
+          </tr>`).join("") + `</table>`
+        : `<span class="mut">no stored itineraries for this watch yet — carrier
+           calendars give one price per date pair; full airline breakdowns come
+           from Google queries</span>`}</td>`;
+      tr.after(row);
+      return;
+    }
     const id = ev.target?.dataset?.h;
     if(!id) return;
     const box = document.getElementById("t-"+id);
@@ -163,8 +197,9 @@ async function load(){
       const hcap = hparts.length
         ? ` · logistics: ${hparts.join(" + ")} · ~+${og.extra_time_h} h` : "";
       const body = rows.map(r => `
-        <tr class="${r.coverage_class==='blind'||r.coverage_class==='dormant'?'blind':''}">
-          <td>${r.destination}</td>
+        <tr class="${r.coverage_class==='blind'||r.coverage_class==='dormant'?'blind':''}"
+            data-offers="${id}|${r.origin}|${r.destination}">
+          <td><span class="lnk">${r.destination}</span></td>
           <td class="mut">${r.destination_name}</td>
           <td>${r.status} ${r.score} <span class="tag">${r.rule}</span></td>
           <td>${r.coverage_class.replace("covered_","")}</td>

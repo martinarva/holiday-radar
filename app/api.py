@@ -104,6 +104,27 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             "summary": json.loads(r["summary_json"]),
         } for r in rows]
 
+    @app.get("/api/offers")
+    def offers(holiday: str, origin: str, destination: str,
+               night: str | None = None, limit: int = 100):
+        """Every itinerary a query returned for this watch — airline
+        combinations, routings and stop counts, cheapest first."""
+        conn = _conn(cfg)
+        rows = dbm.offers_for_watch(conn, holiday, origin.upper(),
+                                    destination.upper(), night, limit)
+        conn.close()
+        return [{
+            "out_date": r["out_date"], "back_date": r["back_date"],
+            "night": r["observed_night"], "source": r["source"],
+            "role": r["observation_role"], "rank": r["offer_rank"],
+            "price_total_eur": r["price_total_eur"],
+            "price_adult_eur": r["price_adult_eur"],
+            "airlines": json.loads(r["airlines"] or "[]"),
+            "legs": json.loads(r["legs"] or "[]"),
+            "stops": r["stops"],
+            "is_direct": bool(r["is_direct"]) if r["is_direct"] is not None else None,
+        } for r in rows]
+
     @app.get("/api/audit-deltas")
     def audit_deltas(limit: int = 50):
         """carrier_vs_google_delta — the provider-bias signal from the

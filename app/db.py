@@ -105,6 +105,39 @@ MIGRATIONS: list[tuple[str, str]] = [
     ("0010_verifications_lookup", """
         CREATE INDEX ix_verif_watch ON verifications
         (holiday_id, origin, destination, out_date, back_date)"""),
+    # Owner request 2026-08-23: keep EVERY itinerary a query returns, not just
+    # the cheapest — a Google query yields 6-10 airline/routing combinations
+    # and throwing 9 away loses exactly the comparison we want internally
+    # (which carrier, how many stops, how much dearer is the direct one).
+    # `observations` stays the one-best-per-watch summary that coverage and
+    # metrics are built on; `offers` is the full detail beside it.
+    ("0011_offers", """
+        CREATE TABLE offers (
+            id INTEGER PRIMARY KEY,
+            holiday_id TEXT NOT NULL,
+            origin TEXT NOT NULL,
+            destination TEXT NOT NULL,
+            out_date TEXT NOT NULL,
+            back_date TEXT NOT NULL,
+            observed_night TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            source TEXT NOT NULL,
+            observation_role TEXT NOT NULL,
+            offer_rank INTEGER NOT NULL,
+            price_total_eur REAL NOT NULL,
+            price_adult_eur REAL,
+            airlines TEXT,
+            legs TEXT,
+            stops INTEGER,
+            is_direct INTEGER
+        )"""),
+    ("0012_offers_unique", """
+        CREATE UNIQUE INDEX ux_offers_key ON offers
+        (holiday_id, origin, destination, out_date, back_date,
+         observed_night, source, offer_rank)"""),
+    ("0013_offers_lookup", """
+        CREATE INDEX ix_offers_watch ON offers
+        (holiday_id, origin, destination, observed_night)"""),
 ]
 
 
@@ -170,6 +203,61 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
         n += 1
     conn.commit()
     return n
+
+
+def upsert_offers(conn: sqlite3.Connection, holiday_id: str, offers,
+                  seats: int, role: str = "discovery") -> int:
+    """Store every itinerary a query returned (airline combinations, stop
+    counts, prices), ranked cheapest-first. Same per-night upsert semantics
+    as observations: a rerun updates the night's rows, it never duplicates."""
+    now = datetime.now(UTC)
+    night = now.date().isoformat()
+    n = 0
+    for rank, o in enumerate(sorted(offers, key=lambda x: x.price_total_eur)):
+        legs = list(o.legs)
+        conn.execute("""
+            INSERT INTO offers
+              (holiday_id, origin, destination, out_date, back_date,
+               observed_night, observed_at, source, observation_role,
+               offer_rank, price_total_eur, price_adult_eur, airlines, legs,
+               stops, is_direct)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(holiday_id, origin, destination, out_date, back_date,
+                        observed_night, source, offer_rank)
+            DO UPDATE SET
+              observed_at=excluded.observed_at,
+              observation_role=excluded.observation_role,
+              price_total_eur=excluded.price_total_eur,
+              price_adult_eur=excluded.price_adult_eur,
+              airlines=excluded.airlines, legs=excluded.legs,
+              stops=excluded.stops, is_direct=excluded.is_direct
+        """, (holiday_id, o.origin, o.destination, o.out_date.isoformat(),
+              o.back_date.isoformat(), night, now.isoformat(), o.source, role,
+              rank, o.price_total_eur,
+              round(o.price_total_eur / seats, 2) if seats else None,
+              json.dumps(list(o.airlines)), json.dumps(legs),
+              max(0, len(legs) - 2), int(len(legs) <= 2)))
+        n += 1
+    conn.commit()
+    return n
+
+
+def offers_for_watch(conn: sqlite3.Connection, holiday_id: str, origin: str,
+                     destination: str, night: str | None = None,
+                     limit: int = 100) -> list[sqlite3.Row]:
+    if night is None:
+        r = conn.execute(
+            "SELECT MAX(observed_night) n FROM offers WHERE holiday_id=? "
+            "AND origin=? AND destination=?",
+            (holiday_id, origin, destination)).fetchone()
+        night = r["n"] if r else None
+    if not night:
+        return []
+    return list(conn.execute("""
+        SELECT * FROM offers
+        WHERE holiday_id=? AND origin=? AND destination=? AND observed_night=?
+        ORDER BY price_total_eur LIMIT ?
+    """, (holiday_id, origin, destination, night, limit)))
 
 
 def sampler_state_all(conn: sqlite3.Connection) -> dict[tuple, dict]:
