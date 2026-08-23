@@ -47,15 +47,33 @@ def cmd_holidays(cfg: Config, args) -> None:
 def cmd_probe_ryanair(cfg: Config, args) -> None:
     from app.providers import ryanair
     h = _holiday(cfg, args.holiday)
-    obs = ryanair.round_trip_fares(args.origin, h.departure_window(),
-                                   h.return_window(), currency=cfg.currency)
+    obs = ryanair.for_holiday(args.origin, h, currency=cfg.currency)
     seats = cfg.passengers.seats
-    print(f"{len(obs)} destinations with fares from {args.origin.upper()} "
-          f"({h.id} windows):")
+    print(f"{len(obs)} destinations with valid-duration fares from "
+          f"{args.origin.upper()} ({h.id}: {h.duration_min}-{h.duration_max} nights):")
     for o in obs[:15]:
         print(f"  {o.destination} {o.destination_name:<22.22s} "
               f"{o.price_adult_eur:7.2f} €/adult  ~{o.family_estimate_eur(seats):7.0f} € family  "
-              f"{o.out_date} → {o.back_date}")
+              f"{o.out_date} → {o.back_date} ({o.nights}n)")
+
+
+def cmd_probe_airbaltic(cfg: Config, args) -> None:
+    from app.providers import airbaltic
+    h = _holiday(cfg, args.holiday)
+    dest = cfg.destination(args.dest)
+    obs = airbaltic.pair_candidates(args.origin, args.dest, h,
+                                    destination_name=dest.name if dest else "")
+    seats = cfg.passengers.seats
+    print(f"{len(obs)} date-pair candidates {args.origin.upper()}→"
+          f"{args.dest.upper()} ({h.id}), cheapest first:")
+    for o in obs[:12]:
+        d = "direct" if o.is_direct else "conn.  "
+        legs = o.raw or {}
+        sd = h.school_days_needed(o.out_date, o.back_date, cfg.public_holidays)
+        flag = f" 🏫+{sd}" if sd else ""
+        print(f"  {o.price_adult_eur:7.2f} €/adult ~{o.family_estimate_eur(seats):6.0f} € fam  "
+              f"{o.out_date}→{o.back_date} ({o.nights}n, {d}) "
+              f"[{legs.get('out_leg_eur')}+{legs.get('in_leg_eur')}]{flag}")
 
 
 def cmd_probe_google(cfg: Config, args) -> None:
@@ -158,9 +176,15 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("holidays", help="show active holidays and search windows")
 
-    pr = sub.add_parser("probe-ryanair", help="cheapest RTs in a holiday window")
+    pr = sub.add_parser("probe-ryanair", help="cheapest valid RTs in a holiday window")
     pr.add_argument("--origin", required=True)
     pr.add_argument("--holiday", required=True)
+
+    pa = sub.add_parser("probe-airbaltic",
+                        help="ALL date-pair candidates for one watch (2 GETs)")
+    pa.add_argument("--origin", required=True)
+    pa.add_argument("--dest", required=True)
+    pa.add_argument("--holiday", required=True)
 
     pg = sub.add_parser("probe-google", help="verify one exact date pair")
     pg.add_argument("--origin", required=True)
@@ -202,6 +226,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         {"holidays": cmd_holidays,
          "probe-ryanair": cmd_probe_ryanair,
+         "probe-airbaltic": cmd_probe_airbaltic,
          "probe-google": cmd_probe_google,
          "probe-travelpayouts": cmd_probe_tp,
          "benchmark": cmd_benchmark,

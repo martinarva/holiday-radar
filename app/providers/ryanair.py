@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 from datetime import date
 
+from app.holidays import Holiday
 from app.providers.base import CONF_EXACT_PAIR, Observation, ProviderError
 
 FARES_URL = "https://services-api.ryanair.com/farfnd/v4/roundTripFares"
@@ -48,15 +49,20 @@ def parse_round_trip_fares(data: dict, origin: str) -> list[Observation]:
         try:
             ob, ib = f["outbound"], f["inbound"]
             arr = ob["arrivalAirport"]
+            value = float(f["summary"]["price"]["value"])
             obs.append(Observation(
                 origin=origin.upper(),
                 destination=arr["iataCode"],
                 destination_name=arr.get("name", ""),
                 out_date=date.fromisoformat(ob["departureDate"][:10]),
                 back_date=date.fromisoformat(ib["departureDate"][:10]),
-                price_adult_eur=float(f["summary"]["price"]["value"]),
+                price_adult_eur=value,
                 source="ryanair",
                 confidence=CONF_EXACT_PAIR,
+                price_basis="quoted_rt",
+                source_price=value,
+                # the fare finder prices Ryanair's own point-to-point network
+                is_direct=True,
             ))
         except (KeyError, TypeError, ValueError):
             continue    # one malformed fare must not kill the batch
@@ -66,9 +72,13 @@ def parse_round_trip_fares(data: dict, origin: str) -> list[Observation]:
 def round_trip_fares(origin: str,
                      departure_window: tuple[date, date],
                      return_window: tuple[date, date],
-                     currency: str = "EUR") -> list[Observation]:
-    """Cheapest RT per destination inside the windows, one request."""
-    params = urllib.parse.urlencode({
+                     currency: str = "EUR",
+                     duration_min: int | None = None,
+                     duration_max: int | None = None) -> list[Observation]:
+    """Cheapest RT per destination inside the windows, one request.
+    durationFrom/To are passed server-side when given so the per-destination
+    cheapest is the cheapest VALID pair (not e.g. a 3-night trip)."""
+    q = {
         "departureAirportIataCode": origin.upper(),
         "outboundDepartureDateFrom": departure_window[0].isoformat(),
         "outboundDepartureDateTo": departure_window[1].isoformat(),
@@ -77,5 +87,29 @@ def round_trip_fares(origin: str,
         "currency": currency,
         "adultPaxCount": 1,
         "market": "en-gb",
-    })
+    }
+    if duration_min is not None:
+        q["durationFrom"] = duration_min
+    if duration_max is not None:
+        q["durationTo"] = duration_max
+    params = urllib.parse.urlencode(q)
     return parse_round_trip_fares(_get_json(f"{FARES_URL}?{params}"), origin)
+
+
+def filter_for_holiday(obs: list[Observation], holiday: Holiday) -> list[Observation]:
+    """Client-side guarantee of the same nights/window semantics every
+    provider must share — belt and suspenders over the server-side params."""
+    return [o for o in obs
+            if holiday.in_windows(o.out_date, o.back_date)
+            and holiday.duration_min <= o.nights <= holiday.duration_max]
+
+
+def for_holiday(origin: str, holiday: Holiday,
+                currency: str = "EUR") -> list[Observation]:
+    """Window fares for one holiday with duration bounds enforced both
+    server- and client-side."""
+    obs = round_trip_fares(origin, holiday.departure_window(),
+                           holiday.return_window(), currency=currency,
+                           duration_min=holiday.duration_min,
+                           duration_max=holiday.duration_max)
+    return filter_for_holiday(obs, holiday)

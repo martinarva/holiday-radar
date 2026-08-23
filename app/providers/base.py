@@ -37,25 +37,50 @@ def utcnow() -> datetime:
 
 @dataclass(frozen=True)
 class Observation:
-    """One stage-A price observation for a (origin, destination) watch."""
+    """One stage-A date-pair candidate for a (origin, destination) watch.
+
+    Price semantics are explicit so historical rows never need
+    reinterpretation (review 2026-08-23):
+      price_adult_eur      — normalized per-adult ROUND-TRIP price, the
+                             number comparable across providers
+      price_basis          — how it was derived: "quoted_rt" (provider quoted
+                             a round trip) or "leg_sum" (two one-way legs
+                             summed; indicative until stage-B verify)
+      source_price         — the single number the provider actually quoted,
+                             if any (leg components live in `raw`)
+      estimated_family_eur — explicit upper-bound family estimate (× seats),
+                             filled by the layer that knows the passenger
+                             config; never presented as a precise price
+      is_direct            — True/False when the provider says; None unknown
+    """
     origin: str
     destination: str
     out_date: date
     back_date: date
-    price_adult_eur: float          # normalized per adult (cache convention)
+    price_adult_eur: float
     source: str                     # provider id, e.g. "ryanair"
     observed_at: datetime = field(default_factory=utcnow)
     freshness_hours: float | None = None   # cache age if the provider tells us
     confidence: str = CONF_EXACT_PAIR
     destination_name: str = ""
     raw: dict | None = None         # provider payload snippet for debugging
+    price_basis: str = "quoted_rt"
+    source_price: float | None = None
+    estimated_family_eur: float | None = None
+    is_direct: bool | None = None
 
     @property
     def days_to_departure(self) -> int:
         return (self.out_date - self.observed_at.date()).days
 
+    @property
+    def nights(self) -> int:
+        return (self.back_date - self.out_date).days
+
     def family_estimate_eur(self, seats: int) -> float:
         """Upper-bound family estimate: children pay ~adult fare on LCCs."""
+        if self.estimated_family_eur is not None:
+            return self.estimated_family_eur
         return round(self.price_adult_eur * seats, 2)
 
 
