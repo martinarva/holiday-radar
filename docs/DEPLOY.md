@@ -18,6 +18,28 @@ printf 'RADAR_PORT=8770\nTZ=Europe/Tallinn\n' > .env
 docker compose up -d --build
 ```
 
+The live instance runs from `/home/arva/docker/holiday-radar` on
+`192.168.1.35`. To push local changes to it:
+
+```bash
+rsync -az --exclude .venv --exclude data --exclude __pycache__ --exclude .git \
+  ./ arva@192.168.1.35:/home/arva/docker/holiday-radar/ \
+  && ssh arva@192.168.1.35 'cd /home/arva/docker/holiday-radar \
+     && docker compose build --quiet && docker compose up -d'
+```
+
+`config.yaml`, `presets/` and `data/` are bind-mounted, so edits to those
+take effect without a rebuild.
+
+## Fetching one carrier without a full nightly
+
+A nightly cycle re-queries the whole grid. To backfill a single source into
+an existing database — after admitting a new carrier, say:
+
+```bash
+docker exec holiday-radar-web python -m app.cli fetch-wizz
+```
+
 Everything persistent lives in `./data`:
 
 - `radar.db` — observations, offers, watch state, verifications, runs
