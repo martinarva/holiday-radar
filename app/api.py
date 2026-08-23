@@ -231,6 +231,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                     "legs": json.loads(r["legs"] or "[]"),
                     "stops": r["stops"],
                     "is_direct": bool(r["is_direct"]) if r["is_direct"] is not None else None,
+                    "leg_details": json.loads(r["leg_details"] or "[]"),
+                    "first_departure": r["first_departure"],
+                    "last_arrival": r["last_arrival"],
                     "source": r["source"], "role": r["observation_role"],
                 })
         offers.sort(key=lambda o: o["price_total_eur"])

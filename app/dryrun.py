@@ -23,7 +23,7 @@ from datetime import date
 from app import climate
 from app.config import Config
 from app.holidays import Holiday
-from app.providers import ProviderError, airbaltic, ryanair
+from app.providers import ProviderError, airbaltic, ryanair, wizzair
 from app.providers.base import Observation
 from app.watchlist import derive, holiday_mid_month
 
@@ -43,6 +43,7 @@ class WatchRow:
     dormant: bool = False
     bt_candidates: list[Observation] = field(default_factory=list)
     ry_pair: Observation | None = None
+    wz_pair: Observation | None = None
 
     @property
     def bt_direct(self) -> bool:
@@ -50,13 +51,15 @@ class WatchRow:
 
     @property
     def covered(self) -> bool:
-        return bool(self.bt_candidates) or self.ry_pair is not None
+        return (bool(self.bt_candidates) or self.ry_pair is not None
+                or self.wz_pair is not None)
 
     @property
     def coverage_class(self) -> str:
         if self.dormant and not self.covered:
             return "dormant"
-        if self.ry_pair is not None or self.bt_direct:
+        if (self.ry_pair is not None or self.wz_pair is not None
+                or self.bt_direct):
             return "covered_direct"
         if self.bt_candidates:
             return "covered_1stop"
@@ -168,6 +171,34 @@ def collect(cfg: Config, log=print, sleep_s: float = 0.12) -> dict:
                 ry_fares[(o.code, h.id)] = {}
             time.sleep(sleep_s)
 
+    # --- Wizz Air timetable: one POST per (origin, destination, holiday) ---
+    # Google indexes no ULCC (0 Wizz/Ryanair/easyJet rows in 9819 sampled
+    # offers), so these fares reach us here or not at all. Wizz serves only
+    # TLL of our origins, and few of its 13 routes are in the pool, so the
+    # call volume stays in the low tens.
+    wz_fares: dict[tuple[str, str], dict[str, Observation]] = {}
+    pool = {d.iata for d in cfg.destinations}
+    for o in cfg.origins:
+        try:
+            net = [r for r in wizzair.routes(o.code) if r["code"] in pool]
+        except ProviderError as e:
+            log(f"wizzair network {o.code}: {e}")
+            continue
+        if net:
+            log(f"wizzair {o.code}: {len(net)} pool routes "
+                f"({', '.join(r['code'] for r in net)})")
+        for h in sale_hols:
+            got: dict[str, Observation] = {}
+            for r in net:
+                try:
+                    obs = wizzair.for_holiday(o.code, r["code"], h, r["name"])
+                    if obs:
+                        got[r["code"]] = obs[0]       # cheapest valid pair
+                except ProviderError as e:
+                    log(f"wizzair {o.code}-{r['code']}/{h.id}: {e}")
+                time.sleep(sleep_s)
+            wz_fares[(o.code, h.id)] = got
+
     # --- assemble candidates per active watch ---
     for r in active:
         h = hols[r.holiday_id]
@@ -177,6 +208,7 @@ def collect(cfg: Config, log=print, sleep_s: float = 0.12) -> dict:
             r.bt_candidates = airbaltic.candidates_from_grids(
                 og, ig, h, r.origin, r.destination)
         r.ry_pair = ry_fares.get((r.origin, r.holiday_id), {}).get(r.destination)
+        r.wz_pair = wz_fares.get((r.origin, r.holiday_id), {}).get(r.destination)
 
     return {"started_at": started_at, "today": today, "errors": errors,
             "hols": hols, "rows": rows, "relevant": relevant,
@@ -235,7 +267,8 @@ def compute_metrics(cfg: Config, hols: dict[str, Holiday],
 
     best: list[tuple[float, WatchRow, Observation]] = []
     for r in covered:
-        cands = list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
+        cands = (list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
+                 + ([r.wz_pair] if r.wz_pair else []))
         o = min(cands, key=lambda x: x.price_adult_eur)
         best.append((o.family_estimate_eur(seats), r, o))
     best.sort(key=lambda t: t[0])
@@ -263,7 +296,8 @@ def _persist(cfg: Config, db_path, relevant: list[WatchRow],
     conn = dbm.init_db(db_path)
     seats = cfg.passengers.seats
     for r in relevant:
-        obs = list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
+        obs = (list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
+               + ([r.wz_pair] if r.wz_pair else []))
         if obs:
             dbm.upsert_observations(conn, r.holiday_id, obs, seats)
     dbm.write_watch_state(conn, [{

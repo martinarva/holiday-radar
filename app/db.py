@@ -17,6 +17,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app import itinerary
 from app.providers.base import Observation
 
 MIGRATIONS: list[tuple[str, str]] = [
@@ -188,10 +189,60 @@ MIGRATIONS: list[tuple[str, str]] = [
             active INTEGER NOT NULL DEFAULT 1,
             definition_yaml TEXT
         )"""),
+    # Clock times on the observation itself, so the UI never has to join.
+    # Availability differs by source and that is honest, not a bug:
+    #   ryanair    both directions (their fare finder publishes them)
+    #   google     outbound only (a round-trip query lists outbound legs)
+    #   airbaltic  none (the /fsf calendar is date-resolution)
+    ("0022_observation_times", """
+        ALTER TABLE observations ADD COLUMN out_departure TEXT"""),
+    ("0023_observation_times2", """
+        ALTER TABLE observations ADD COLUMN out_arrival TEXT"""),
+    ("0024_observation_times3", """
+        ALTER TABLE observations ADD COLUMN in_departure TEXT"""),
+    ("0025_observation_times4", """
+        ALTER TABLE observations ADD COLUMN in_arrival TEXT"""),
+
+    ("0026_observation_layover", """
+        ALTER TABLE observations ADD COLUMN max_layover_h REAL"""),
+    ("0027_observation_layover2", """
+        ALTER TABLE observations ADD COLUMN layover_label TEXT"""),
+    ("0028_observation_layover3", """
+        ALTER TABLE observations ADD COLUMN layover_overnight INTEGER"""),
 ]
 
 # source -> operating carrier when the source implies it
-SOURCE_AIRLINE = {"ryanair": "Ryanair", "airbaltic": "airBaltic"}
+SOURCE_AIRLINE = {"ryanair": "Ryanair", "airbaltic": "airBaltic",
+                  "wizzair": "Wizz Air"}
+
+
+def times_of(o: Observation) -> dict:
+    """Clock times an observation carries, whatever its source supplies."""
+    raw = o.raw or {}
+    t = dict(raw.get("times") or {})
+    legs = raw.get("leg_details") or []
+    if legs and not t.get("out_departure"):
+        t["out_departure"] = legs[0].get("departure")
+        t["out_arrival"] = legs[-1].get("arrival")
+    return {k: t.get(k) for k in
+            ("out_departure", "out_arrival", "in_departure", "in_arrival")}
+
+
+def layover_of(o: Observation) -> dict:
+    """Connection quality for an observation, where legs are known.
+
+    Only the leg list can reveal a 16-hour wait; without it the fields stay
+    null rather than implying a clean connection (see app/itinerary.py).
+    """
+    legs = (o.raw or {}).get("leg_details") or []
+    if len(legs) < 2:
+        return {"max_layover_h": None, "layover_label": None,
+                "layover_overnight": None}
+    s = itinerary.summarize(legs)
+    return {"max_layover_h": s["max_layover_h"],
+            "layover_label": s["layover_label"],
+            "layover_overnight": None if s["max_layover_h"] is None
+            else int(s["overnight"])}
 
 
 def airlines_of(o: Observation) -> list[str]:
@@ -239,8 +290,9 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
                observed_night, observed_at, price_adult_eur, price_basis,
                source_price, estimated_family_eur, is_direct, confidence,
                freshness_hours, days_to_departure, raw_json, observation_role,
-               airlines)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               airlines, out_departure, out_arrival, in_departure, in_arrival,
+               max_layover_h, layover_label, layover_overnight)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(holiday_id, origin, destination, source,
                         out_date, back_date, observed_night)
             DO UPDATE SET
@@ -255,7 +307,14 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               days_to_departure=excluded.days_to_departure,
               raw_json=excluded.raw_json,
               observation_role=excluded.observation_role,
-              airlines=excluded.airlines
+              airlines=excluded.airlines,
+              out_departure=excluded.out_departure,
+              out_arrival=excluded.out_arrival,
+              in_departure=excluded.in_departure,
+              in_arrival=excluded.in_arrival,
+              max_layover_h=excluded.max_layover_h,
+              layover_label=excluded.layover_label,
+              layover_overnight=excluded.layover_overnight
         """, (holiday_id, o.origin, o.destination, o.source,
               o.out_date.isoformat(), o.back_date.isoformat(),
               night, o.observed_at.isoformat(),
@@ -264,7 +323,11 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               None if o.is_direct is None else int(o.is_direct),
               o.confidence, o.freshness_hours, o.days_to_departure,
               json.dumps(o.raw) if o.raw else None, role,
-              json.dumps(airlines_of(o))))
+              json.dumps(airlines_of(o)),
+              *(times_of(o)[k] for k in ("out_departure", "out_arrival",
+                                         "in_departure", "in_arrival")),
+              *(layover_of(o)[k] for k in ("max_layover_h", "layover_label",
+                                           "layover_overnight"))))
         n += 1
     conn.commit()
     return n
@@ -304,7 +367,10 @@ def upsert_offers(conn: sqlite3.Connection, holiday_id: str, offers,
               rank, o.price_total_eur,
               round(o.price_total_eur / seats, 2) if seats else None,
               json.dumps(list(o.airlines)), json.dumps(legs),
-              max(0, len(legs) - 2), int(len(legs) <= 2),
+              # Google lists only the OUTBOUND itinerary for a round-trip
+              # query, so N legs mean N-1 stops (a TLL-WAW-TBS pair was being
+              # recorded as nonstop by the old len(legs)-2 assumption).
+              max(0, len(legs) - 1), int(len(legs) <= 1),
               getattr(o, "first_departure", None),
               getattr(o, "last_arrival", None),
               json.dumps(list(getattr(o, "leg_details", ()) or []))))

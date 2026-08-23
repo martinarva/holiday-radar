@@ -232,6 +232,58 @@ def cmd_nightly(cfg: Config, args) -> None:
         print(f"  {k}: {v}")
 
 
+def cmd_fetch_wizz(cfg: Config, args) -> None:
+    """Wizz Air only — no Google sampler, no airBaltic, no full nightly.
+
+    Wizz was admitted late (the recon's version probe was broken, and the
+    "Google covers it" fallback was false: Google indexes no ULCC at all).
+    This backfills its fares into an existing database without paying for a
+    whole nightly cycle again.
+    """
+    from datetime import date
+
+    from app import db as dbm
+    from app.providers import ProviderError, wizzair
+
+    conn = dbm.init_db(cfg.base_dir / args.db)
+    pool = {d.iata: d for d in cfg.destinations}
+    today = date.today()
+    seats = cfg.passengers.seats
+    total = calls = 0
+    for og in cfg.origins:
+        try:
+            net = [r for r in wizzair.routes(og.code) if r["code"] in pool]
+        except ProviderError as e:
+            print(f"  {og.code}: network lookup failed: {e}")
+            continue
+        if not net:
+            print(f"  {og.code}: outside the Wizz network")
+            continue
+        print(f"  {og.code}: {len(net)} pool routes "
+              f"({', '.join(r['code'] for r in net)})")
+        for h in cfg.active_holidays():
+            if h.start <= today:
+                continue
+            for r in net:
+                try:
+                    obs = wizzair.for_holiday(og.code, r["code"], h, r["name"])
+                    calls += 1
+                except ProviderError as e:
+                    print(f"    {og.code}-{r['code']}/{h.id}: {e}")
+                    continue
+                if not obs:
+                    print(f"    {og.code}-{r['code']}/{h.id}: not on sale")
+                    continue
+                keep = obs if args.all_pairs else obs[:1]
+                total += dbm.upsert_observations(conn, h.id, keep, seats,
+                                                 role="discovery")
+                best = obs[0]
+                print(f"    {og.code}-{r['code']}/{h.id}: {len(obs)} pairs, "
+                      f"cheapest EUR {best.price_adult_eur:.2f}/adult "
+                      f"({best.out_date} -> {best.back_date})")
+    print(f"\n{calls} requests, {total} observations written")
+
+
 def cmd_run_scheduler(cfg: Config, args) -> None:
     """Long-running nightly daemon (the container's scheduler role)."""
     from app.daemon import run_forever
@@ -304,6 +356,12 @@ def main(argv: list[str] | None = None) -> None:
     pn.add_argument("--workers", type=int, default=None,
                     help="parallel Google clients")
 
+    pw = sub.add_parser("fetch-wizz",
+                        help="Wizz Air fares only, into an existing DB")
+    pw.add_argument("--db", default="data/radar.db")
+    pw.add_argument("--all-pairs", action="store_true",
+                    help="store every valid date pair, not just the cheapest")
+
     prs = sub.add_parser("run-scheduler",
                          help="nightly daemon: waits for the cron slot and runs")
     prs.add_argument("--db", default="data/radar.db")
@@ -353,6 +411,7 @@ def main(argv: list[str] | None = None) -> None:
          "dry-run": cmd_dry_run,
          "coverage-report": cmd_coverage_report,
          "nightly": cmd_nightly,
+         "fetch-wizz": cmd_fetch_wizz,
          "run-scheduler": cmd_run_scheduler,
          "serve": cmd_serve,
          "probe-google": cmd_probe_google,

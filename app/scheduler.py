@@ -112,8 +112,9 @@ def offer_to_observation(cfg: Config, offer) -> Observation:
         price_basis="family_quote",
         source_price=offer.price_total_eur,
         estimated_family_eur=offer.price_total_eur,
-        is_direct=len(offer.legs) <= 2,
-        raw={"airlines": list(offer.airlines), "legs": list(offer.legs)},
+        is_direct=len(offer.legs) <= 1,   # outbound-only legs
+        raw={"airlines": list(offer.airlines), "legs": list(offer.legs),
+             "leg_details": [dict(d) for d in (offer.leg_details or ())]},
     )
 
 
@@ -153,7 +154,8 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
     # --- persist carrier stage-A (discovery role) + watch state ---
     carrier_obs = 0
     for r in relevant:
-        obs = list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
+        obs = (list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
+               + ([r.wz_pair] if r.wz_pair else []))
         if obs:
             carrier_obs += dbm.upsert_observations(conn, r.holiday_id, obs,
                                                    seats, role="discovery")

@@ -174,6 +174,70 @@ function verifChip(level){
 }
 function stops(o){ return o.is_direct ? `<span style="color:var(--good)">nonstop</span>`
                                       : `<span style="color:var(--fair)">1+ stop</span>`; }
+const hhmm = s => s ? String(s).slice(11, 16) : null;
+function timesLine(o){
+  const t = (o && o.times) || {};
+  const out = hhmm(t.out_departure), outA = hhmm(t.out_arrival);
+  const inD = hhmm(t.in_departure), inA = hhmm(t.in_arrival);
+  if(!out && !inD) return `<span class="mut">times not published by ${esc(o.source||"source")}</span>`;
+  const rows = [];
+  if(out) rows.push(`<span class="mut">out</span> <b>${out}</b>${outA?` → <b>${outA}</b>`:""}`);
+  if(inD) rows.push(`<span class="mut">back</span> <b>${inD}</b>${inA?` → <b>${inA}</b>`:""}`);
+  else if(out) rows.push(`<span class="mut">back — return times not listed for a round-trip search</span>`);
+  return rows.join(" · ");
+}
+/* A "1 stop" that waits 16 hours in Warsaw is not the trip a "1 stop" label
+   suggests — and the wait is often why the fare looked cheap. */
+function layoverChip(o){
+  const L = (o && o.layover) || {};
+  if(o && o.is_direct) return `<span style="color:var(--good)">nonstop</span>`;
+  if(L.max_hours == null) return `<span class="mut">stop length unknown</span>`;
+  const h = L.max_hours;
+  const col = h <= 3 ? "var(--good)" : h <= 5 ? "var(--fair)" : "var(--bad)";
+  return `<span style="color:${col}">${esc(L.label || (h.toFixed(1)+"h layover"))}</span>`;
+}
+function legsLayover(legs){
+  if(!legs || legs.length < 2) return null;
+  let worst = null;
+  for(let i = 0; i + 1 < legs.length; i++){
+    const a = Date.parse(legs[i].arrival), b = Date.parse(legs[i+1].departure);
+    if(isNaN(a) || isNaN(b) || b < a) continue;
+    const h = (b - a) / 3600000;
+    if(!worst || h > worst.h) worst = {h, at: legs[i].to, start: new Date(a), end: new Date(b)};
+  }
+  if(!worst) return null;
+  // a wait touching 00:00-06:00, or a full day either way, means a room
+  let overnight = worst.h >= 10;
+  for(let t = new Date(worst.start); t < worst.end && !overnight; t.setHours(t.getHours()+1))
+    if(t.getHours() < 6) overnight = true;
+  return {...worst, overnight};
+}
+function offerConnection(x){
+  if(x.is_direct) return `<span style="color:var(--good)">nonstop</span>`;
+  const L = legsLayover(x.leg_details);
+  if(!L) return `<span class="mut">${x.stops} stop${x.stops===1?"":"s"}</span>`;
+  const col = L.h <= 3 ? "var(--good)" : L.h <= 5 ? "var(--fair)" : "var(--bad)";
+  const hh = Math.floor(L.h), mm = Math.round((L.h % 1) * 60);
+  return `<span style="color:${col}">${hh}h${String(mm).padStart(2,"0")} ${esc(L.at||"")}</span>`
+       + (L.overnight ? `<br><span class="mut small">needs a hotel</span>` : "");
+}
+function layoverCell(o){
+  const L = (o && o.layover) || {};
+  if(o && o.is_direct) return `<span style="color:var(--good)">direct</span>`;
+  if(L.max_hours == null) return `<span class="mut">?</span>`;
+  const h = L.max_hours;
+  const col = h <= 3 ? "var(--good)" : h <= 5 ? "var(--fair)" : "var(--bad)";
+  const hh = Math.floor(h), mm = Math.round((h % 1) * 60);
+  return `<span style="color:${col}">${hh}h${String(mm).padStart(2,"0")}</span>`
+       + (L.overnight ? `<br><span class="mut small">+hotel</span>` : "");
+}
+const timesCell = o => {
+  const t = (o && o.times) || {};
+  const a = hhmm(t.out_departure), b = hhmm(t.out_arrival);
+  const c = hhmm(t.in_departure), d = hhmm(t.in_arrival);
+  if(!a && !c) return `<span class="mut">–</span>`;
+  return `${a?`${a}${b?"–"+b:""}`:"–"}<br><span class="mut">${c?`${c}${d?"–"+d:""}`:"–"}</span>`;
+};
 
 /* ---------------- Radar home ---------------- */
 async function viewRadar(el){
@@ -431,10 +495,12 @@ async function viewOpportunity(el, hid, dst){
   g.append($(`<div class="card">
     <div class="kicker mut small" style="letter-spacing:.08em">RECOMMENDED</div>
     <div class="mid" style="margin:6px 0">${b.origin} → ${o.destination}</div>
-    <div class="mut">${dfmt(b.out_date)} → ${dfmt(b.back_date)} · ${b.nights} nights · ${stops(b)}</div>
+    <div class="mut">${dfmt(b.out_date)} → ${dfmt(b.back_date)} · ${b.nights} nights · ${layoverChip(b)}</div>
+    <div class="small" style="margin-top:4px">${timesLine(b)}</div>
     <div class="big price" style="margin-top:10px">${eur(b.effective_eur)}</div>
     <div class="mut small">${b.logistics_eur ? `${eur(b.flights_eur)} flights + ${eur(b.logistics_eur)} ${b.origin} logistics`
-      : "no origin logistics"}${b.hotel_risk_eur ? ` · +${eur(b.hotel_risk_eur)} hotel if the flight is early/late` : ""}</div>
+      : "no origin logistics"}${b.layover_hotel_eur ? ` + ${eur(b.layover_hotel_eur)} layover hotel` : ""}${
+      b.hotel_risk_eur ? ` · +${eur(b.hotel_risk_eur)} hotel if the flight is early/late` : ""}</div>
     <div class="facts small">${schoolChip(b)} · ${(b.airlines||[]).join(" + ")||"airline n/a"}</div>
     <div class="row" style="margin-top:12px">${dealPill(b)} ${scorePill(b.score)}</div>
     <div class="small mut" style="margin-top:8px">Why?<br>${
@@ -474,8 +540,9 @@ async function viewOpportunity(el, hid, dst){
 
   el.append($(`<h2>How to get there</h2>`));
   const t = $(`<div class="card scroll"><table><thead><tr><th>Origin</th><th class="n">Flights</th>
-    <th class="n">Logistics</th><th class="n">Effective</th><th>Trip</th><th>School</th>
-    <th>Airline</th><th>Why</th></tr></thead><tbody></tbody></table></div>`);
+    <th class="n">Logistics</th><th class="n">Effective</th><th>Trip · longest stop</th>
+    <th>Times<br><span style="text-transform:none">out / back</span></th>
+    <th>School</th><th>Airline</th><th>Why</th></tr></thead><tbody></tbody></table></div>`);
   const tb = t.querySelector("tbody");
   for(const opt of o.origin_options){
     const rec = opt === b || opt.origin === b.origin;
@@ -484,7 +551,8 @@ async function viewOpportunity(el, hid, dst){
       <td class="n price">${eur(opt.flights_eur)}</td>
       <td class="n price mut">${opt.logistics_eur?"+"+eur(opt.logistics_eur):"—"}</td>
       <td class="n price"><b>${eur(opt.effective_eur)}</b></td>
-      <td>${opt.is_direct?"direct":"1+ stop"} · ${opt.nights}n</td>
+      <td>${opt.nights}n · ${layoverCell(opt)}</td>
+      <td class="small">${timesCell(opt)}</td>
       <td>${opt.school_days?("🏫 "+opt.school_days):"✓ 0"}</td>
       <td class="mut">${(opt.airlines||[]).join("+")||"–"}</td>
       <td class="mut small">${(opt.reasons||[]).slice(0,2).map(r=>(r.good?"✓ ":"△ ")+esc(r.text)).join("<br>")}</td>
@@ -557,14 +625,17 @@ async function viewOpportunity(el, hid, dst){
   if(d.offers.length){
     el.append($(`<h2>All itineraries seen</h2>`));
     const of = $(`<div class="card scroll"><table><thead><tr><th class="n">#</th><th class="n">Family</th>
-      <th>Airlines</th><th>Routing</th><th>Stops</th><th>Dates</th><th>From</th></tr></thead>
-      <tbody></tbody></table></div>`);
+      <th>Airlines</th><th>Routing</th><th>Times</th><th>Connection</th><th>Dates</th>
+      <th>From</th></tr></thead><tbody></tbody></table></div>`);
     const ob = of.querySelector("tbody");
     d.offers.slice(0,25).forEach((x,i)=>{
       ob.append($(`<tr><td class="n mut">${i+1}</td><td class="n price">${eur(x.price_total_eur)}</td>
         <td>${esc((x.airlines||[]).join(" + "))||"–"}</td>
         <td class="mut small">${esc((x.legs||[]).join("  "))}</td>
-        <td>${x.is_direct?'<span style="color:var(--good)">nonstop</span>':x.stops}</td>
+        <td class="small">${(x.leg_details||[]).length
+          ? x.leg_details.map(l=>`${esc(l.from)}&nbsp;${hhmm(l.departure)||"–"}→${hhmm(l.arrival)||"–"}`).join("<br>")
+          : '<span class="mut">–</span>'}</td>
+        <td>${offerConnection(x)}</td>
         <td class="mut">${dfmt(x.out_date)}→${dfmt(x.back_date)}</td>
         <td class="mut small">${x.origin} · ${x.source}</td></tr>`));
     });
