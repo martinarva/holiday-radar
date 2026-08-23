@@ -23,10 +23,16 @@ The live instance runs from `/home/arva/docker/holiday-radar` on
 
 ```bash
 rsync -az --exclude .venv --exclude data --exclude __pycache__ --exclude .git \
+  --exclude .env \
   ./ arva@192.168.1.35:/home/arva/docker/holiday-radar/ \
   && ssh arva@192.168.1.35 'cd /home/arva/docker/holiday-radar \
      && docker compose build --quiet && docker compose up -d'
 ```
+
+**`--exclude .env` is not optional.** The server's `.env` is the real one —
+it holds secrets this checkout does not. Syncing without that flag silently
+replaces it with the local copy and deletes whatever the server had
+(this happened once, and quietly ate an `HA_WEBHOOK_URL` line).
 
 `config.yaml`, `presets/` and `data/` are bind-mounted, so edits to those
 take effect without a rebuild.
