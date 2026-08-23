@@ -60,7 +60,11 @@ watch coverage (of our origins × 43-destination pool).
 - **Wizz Air ❌.** Fare-finder UI works (TLL → Anywhere) but the fares fetch
   is worker-tunneled and PerimeterX-guarded (fetch/XHR trap saw nothing;
   `/tl` telemetry POSTs). Decisive anyway: TLL network is 9 city routes —
-  only FCO intersects the pool; RIX exited, HEL absent.
+  only FCO intersects the pool; RIX exited, HEL absent. External
+  confirmation: Wizz's last Latvia route (Kutaisi–Riga) was suspended
+  2025-05-31 and the carrier is absent from RIX's summer-2026 schedule
+  ([LSM](https://eng.lsm.lv/article/economy/transport/12.06.2023-wizz-air-gradually-leaves-riga-international-airport.a512383/),
+  [enginecowl](https://www.enginecowl.com/riga-airport-s26/)).
 - **Norwegian ❌.** Real endpoint recovered from the Low Fare Calendar page
   (see table — clean per-day JSON with transitCount for both directions),
   but the same URL from curl gets the Cloudflare "Are you human?" wall.
@@ -76,3 +80,11 @@ watch coverage (of our origins × 43-destination pool).
 **Final stage-A composition: airBaltic + Ryanair adapters + coverage-aware
 Google sampler (+ hosted SERP backups for verify).** Two carrier adapters,
 both open JSON, covering the bulk of Baltic leisure traffic.
+
+Honesty note on the admitted sources: both are unofficial-but-open JSON
+endpoints the carriers' own sites use. Checked 2026-08-23: neither is
+disallowed by robots.txt (airbaltic.com disallows only `/*?language=*`;
+ryanair.com only account pages). robots.txt is not a license — the usual
+house rules apply: personal use, nightly volume, graceful failure, no
+evasion of any actual protection (the walled carriers were rejected, not
+circumvented).
