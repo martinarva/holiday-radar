@@ -104,6 +104,16 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             "summary": json.loads(r["summary_json"]),
         } for r in rows]
 
+    @app.get("/api/audit-deltas")
+    def audit_deltas(limit: int = 50):
+        """carrier_vs_google_delta — the provider-bias signal from the
+        separate nightly audit budget."""
+        from app import metrics
+        conn = _conn(cfg)
+        out = metrics.audit_deltas(conn, limit=limit)
+        conn.close()
+        return out
+
     @app.get("/api/verifications")
     def verifications(limit: int = 50):
         """E2-B.5 results: exact family totals for candidates that passed the
@@ -181,6 +191,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         conn = _conn(cfg)
         night = dbm.latest_night(conn)
         best_rows = _best_by_watch(conn, holiday_id, night)
+        from app import metrics
         rows = []
         for w in conn.execute(
                 "SELECT * FROM watch_state WHERE holiday_id=?", (holiday_id,)):
@@ -193,6 +204,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 "updated_at": w["updated_at"],
                 "best": _best_payload(cfg, h,
                                       best_rows.get((w["origin"], w["destination"]))),
+                "history": metrics.watch_history(conn, holiday_id, w["origin"],
+                                                 w["destination"]),
             })
         conn.close()
         # cheapest EFFECTIVE price first (fare + trip-length logistics);
