@@ -284,7 +284,8 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                           night=night)
         o = offer_to_observation(cfg, offers[0])
         dbm.upsert_observations(conn, r.holiday_id, [o], seats,
-                                role="discovery", night=night)
+                                role="discovery", night=night,
+                                pairs_per_watch=pairs_per_watch)
         k = (r.holiday_id, r.origin, r.destination)
         if k not in best_per_watch or o.price_adult_eur < best_per_watch[k].price_adult_eur:
             best_per_watch[k] = o

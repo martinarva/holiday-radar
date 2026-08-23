@@ -321,6 +321,9 @@ MIGRATIONS: list[tuple[str, str]] = [
         DROP TABLE IF EXISTS pair_probes"""),
     ("0047_collection_mode_runs", """
         ALTER TABLE collection_mode ADD COLUMN runs INTEGER NOT NULL DEFAULT 1"""),
+
+    ("0048_observation_collection_mode", """
+        ALTER TABLE observations ADD COLUMN collected_pairs_per_watch INTEGER"""),
 ]
 
 # source -> operating carrier when the source implies it
@@ -435,11 +438,11 @@ def record_collection_mode(conn: sqlite3.Connection, night: str,
     data as a full-grid snapshot — deleting most of what had just been
     collected. The run records its own mode; the reader obeys it.
     """
-    # A night can be collected more than once — the scheduled full-grid run,
-    # then a manual `--pairs-per-watch 1`. Overwriting relabelled the FIRST
-    # run's rows with the second run's policy and pruned data that was
-    # perfectly good. Keep whichever mode implies the longer patience (a
-    # rotation, >0), so a re-run can never delete what came before it.
+    # A FALLBACK only, for rows written before observations carried their own
+    # mode. Two runs in one night cannot be reconciled here at all: picking
+    # either value ages one run's rows by the other run's policy, which is
+    # why the mode now lives on the row (see upsert_observations). Keeping
+    # the longer patience is simply the least destructive tie-break.
     conn.execute("""
         INSERT INTO collection_mode (observed_night, pairs_per_watch,
                                      recorded_at, runs)
@@ -516,8 +519,15 @@ def init_db(path: str | Path) -> sqlite3.Connection:
 def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
                         obs: list[Observation], seats: int,
                         role: str = "discovery",
-                        night: str | None = None) -> int:
+                        night: str | None = None,
+                        pairs_per_watch: int | None = None) -> int:
     """One row per watch×source×pair×night; reruns update in place.
+
+    `pairs_per_watch` is the sampler mode THIS row was collected under, kept
+    on the row itself. A per-night record could not survive two runs in one
+    night: a later `--pairs-per-watch 1` pass reclassified the scheduled
+    full-grid rows, and whichever way the collision was resolved, one run's
+    rows were aged by the other run's policy.
 
     `night` is the run's LOCAL date and the caller must pass it. Deriving it
     from `observed_at` (UTC) split a single run in two: a 02:45 Europe/Tallinn
@@ -536,8 +546,8 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
                freshness_hours, days_to_departure, raw_json, observation_role,
                airlines, out_departure, out_arrival, in_departure, in_arrival,
                max_layover_h, layover_label, layover_overnight,
-               layover_certain)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               layover_certain, collected_pairs_per_watch)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             -- observation_role is part of the key: an audit re-quote of the
             -- same pair must sit BESIDE its discovery row, not replace it.
             -- Without it the audit overwrote the very row it was measuring,
@@ -564,7 +574,8 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               max_layover_h=excluded.max_layover_h,
               layover_label=excluded.layover_label,
               layover_overnight=excluded.layover_overnight,
-              layover_certain=excluded.layover_certain
+              layover_certain=excluded.layover_certain,
+              collected_pairs_per_watch=excluded.collected_pairs_per_watch
         """, (holiday_id, o.origin, o.destination, o.source,
               o.out_date.isoformat(), o.back_date.isoformat(),
               row_night, o.observed_at.isoformat(),
@@ -578,7 +589,8 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
                                          "in_departure", "in_arrival")),
               *(layover_of(o)[k] for k in ("max_layover_h", "layover_label",
                                            "layover_overnight",
-                                           "layover_certain"))))
+                                           "layover_certain")),
+              None if pairs_per_watch is None else int(pairs_per_watch)))
         n += 1
     conn.commit()
     return n

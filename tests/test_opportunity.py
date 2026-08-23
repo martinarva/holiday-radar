@@ -830,16 +830,50 @@ def test_a_probe_history_is_kept_per_night_not_overwritten(cfg, tmp_path):
     assert len(rows) == 1 and rows[0]["_from_night"] is None
 
 
-def test_a_second_run_cannot_relabel_the_first_runs_night(cfg, tmp_path):
-    """The scheduled full-grid run, then a manual --pairs-per-watch 1.
+def test_a_later_throttle_run_cannot_relabel_full_grid_rows(cfg, tmp_path):
+    """The reported order: scheduled full grid FIRST, manual throttle after.
 
-    Overwriting the night's mode applied the second run's policy to the
-    first run's rows and pruned data that was perfectly good.
+    Resolving the collision per night — whichever way — ages one run's rows
+    by the other run's policy. Here a full-grid price, which should expire in
+    three nights, was kept visible for forty-eight because a later
+    `--pairs-per-watch 1` pass relabelled its night. The mode belongs to the
+    row.
     """
     conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+
+    def price(pair_out, mode):
+        dbm.upsert_observations(conn, h.id, [Observation(
+            origin="TLL", destination="AGP", out_date=pair_out, back_date=back,
+            price_adult_eur=200.0, source="google_flights",
+            estimated_family_eur=800.0, is_direct=True)], seats=4,
+            night="2026-07-29", pairs_per_watch=mode)
+
+    price(out, 0)                                   # the full-grid sweep
+    price(date(2026, 10, 27), 1)                    # then a throttled pass
+    dbm.record_collection_mode(conn, "2026-07-29", 0)
+    dbm.record_collection_mode(conn, "2026-07-29", 1)
+
+    rows = opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg)
+    kept = {r["out_date"] for r in rows}
+    assert kept == {"2026-10-27"}, (
+        "the full-grid row must age out at three nights, and the throttled "
+        "one must survive its rotation")
+
+
+def test_a_row_without_a_recorded_mode_falls_back_to_the_night(cfg, tmp_path):
+    """Rows written before the column existed still need a policy."""
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    dbm.upsert_observations(conn, h.id, [Observation(
+        origin="TLL", destination="AGP", out_date=date(2026, 10, 26),
+        back_date=date(2026, 11, 1), price_adult_eur=200.0,
+        source="google_flights", estimated_family_eur=800.0,
+        is_direct=True)], seats=4, night="2026-07-29")
+    conn.execute("UPDATE observations SET collected_pairs_per_watch = NULL")
+    conn.commit()
+
+    assert opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg) == []
     dbm.record_collection_mode(conn, "2026-07-29", pairs_per_watch=1)
-    dbm.record_collection_mode(conn, "2026-07-29", pairs_per_watch=0)
-    assert dbm.collection_modes(conn)["2026-07-29"] == 1, \
-        "keep the mode that implies the longer patience"
-    row = conn.execute("SELECT runs FROM collection_mode").fetchone()
-    assert row["runs"] == 2, "and record that the night was collected twice"
+    assert len(opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg)) == 1

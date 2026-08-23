@@ -308,9 +308,13 @@ def latest_priced_rows(conn, holiday_id: str, night: str | None,
         if not row["_from_night"]:
             rows.append(row)
             continue
+        # The row's OWN mode first; the per-night table is only a fallback
+        # for rows written before the column existed.
+        row_mode = _col(r, "collected_pairs_per_watch")
+        if row_mode is None:
+            row_mode = modes.get(r["observed_night"])
         if _nights_apart(row["_from_night"], night) >= _ttl(
-                cfg, r["source"], _col(r, "observation_role"),
-                modes.get(r["observed_night"])):
+                cfg, r["source"], _col(r, "observation_role"), row_mode):
             continue        # nobody has looked in long enough to give up
         rows.append(row)
     return rows

@@ -155,7 +155,17 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         cache = climate_mod.load_cache(cfg)
         run = conn.execute(
             "SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
-        errors = json.loads(run["errors_json"]) if run and run["errors_json"] else []
+        # The last COLLECTION run, same rule /health uses. Reading the last
+        # row of any kind let the 07:00 digest paint the home page green
+        # while the 02:45 cycle had crashed.
+        nightly = conn.execute(
+            "SELECT * FROM runs WHERE kind LIKE 'nightly%' "
+            "ORDER BY id DESC LIMIT 1").fetchone()
+        judged = nightly or run
+        errors = (json.loads(judged["errors_json"])
+                  if judged and judged["errors_json"] else [])
+        failed = bool(judged and (judged["kind"].endswith("-failed")
+                                  or judged["finished_at"] is None))
         holidays, hero = [], None
         for h in cfg.active_holidays():
             ops = opp.build(cfg, conn, h, night, cache)
@@ -171,7 +181,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         return {
             "updated_at": run["finished_at"] if run else None,
             "night": night,
-            "health": "degraded" if errors else "healthy",
+            "health": ("failed" if failed
+                       else "degraded" if errors else "healthy"),
             "error_count": len(errors),
             "family": {"adults": cfg.passengers.adults,
                        "children": cfg.passengers.children},
@@ -306,24 +317,26 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         by_source = {r["source"]: r["c"] for r in conn.execute(
             "SELECT source, COUNT(*) c FROM observations GROUP BY 1")}
         # "healthy" has to mean "answered lately". Counting all of history
-        # pinned a provider green forever on one row from weeks ago. The
-        # window is a span of DAYS back from the latest night — counting the
-        # last N nights that happen to exist in the table would have called a
-        # July row recent in a database whose only other night is August.
-        from datetime import date as _date
+        # pinned a provider green forever on one row from weeks ago.
+        #
+        # The window is a span of DAYS back from TODAY. Two anchors were
+        # wrong before it: "the last N nights present in the table" called a
+        # July row recent in a database whose only other night is August, and
+        # latest_night froze the moment collection stopped — so a total
+        # outage left every provider green, which is precisely what this
+        # indicator exists to reveal.
+        from datetime import datetime as _dt
         from datetime import timedelta as _td
+        from zoneinfo import ZoneInfo
 
         window = int((cfg.preferences or {}).get(
             "provider_healthy_within_nights") or 3)
-        recent = {}
-        if night:
-            try:
-                cutoff = (_date.fromisoformat(night) - _td(days=window)).isoformat()
-            except ValueError:
-                cutoff = night
-            recent = {r["source"]: r["c"] for r in conn.execute(
-                "SELECT source, COUNT(*) c FROM observations "
-                "WHERE observed_night > ? GROUP BY 1", (cutoff,))}
+        today = _dt.now(ZoneInfo(
+            cfg.scheduler.get("timezone", "Europe/Tallinn"))).date()
+        cutoff = (today - _td(days=window)).isoformat()
+        recent = {r["source"]: r["c"] for r in conn.execute(
+            "SELECT source, COUNT(*) c FROM observations "
+            "WHERE observed_night > ? GROUP BY 1", (cutoff,))}
 
         def carrier_state(src):
             if recent.get(src):

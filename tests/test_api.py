@@ -226,8 +226,12 @@ def test_a_provider_that_has_gone_quiet_reads_stale_not_healthy(tmp_path):
             back_date=date(2026, 11, 1), price_adult_eur=100.0, source=src,
             estimated_family_eur=400.0, is_direct=True)], seats=4, night=night)
 
-    obs("ryanair", "2026-07-01")            # long ago
-    obs("airbaltic", "2026-08-23")          # tonight
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+    today = _dt.now(ZoneInfo(cfg.scheduler.get("timezone",
+                                               "Europe/Tallinn"))).date()
+    obs("ryanair", "2026-07-01")                    # long ago
+    obs("airbaltic", today.isoformat())             # tonight
     conn.close()
 
     states = {p["name"]: p["state"]
@@ -235,3 +239,62 @@ def test_a_provider_that_has_gone_quiet_reads_stale_not_healthy(tmp_path):
     assert states["airBaltic"] == "healthy"
     assert states["Ryanair"] == "stale", "silent for weeks is not healthy"
     assert states["Wizz Air"] == "idle", "never seen is not stale"
+
+
+def test_the_home_page_agrees_with_health_about_a_failed_nightly(tmp_path):
+    """/health was fixed and /api/radar was not, so they disagreed.
+
+    Reproduction: /health answered 503 nightly-failed while the home page
+    reported healthy with error_count 0.
+    """
+    from fastapi.testclient import TestClient
+
+    from app import db as dbm
+    from app.api import create_app
+
+    cfg = load_config(ROOT / "config.yaml")
+    cfg.base_dir = tmp_path
+    conn = dbm.init_db(tmp_path / "data" / "radar.db")
+    dbm.record_run(conn, "nightly-failed", NOW.isoformat(),
+                   {"night": "2026-08-23", "ok": False}, errors=["boom"])
+    dbm.record_run(conn, "alerts", NOW.isoformat(),
+                   {"night": "2026-08-23", "queued": 0, "delivered": 0})
+    conn.close()
+
+    c = TestClient(create_app(cfg))
+    assert c.get("/health").status_code == 503
+    radar = c.get("/api/radar").json()
+    assert radar["health"] == "failed", "the home page must not say healthy"
+    assert radar["error_count"] == 1
+
+
+def test_a_total_outage_does_not_leave_every_provider_green(tmp_path):
+    """The window must be anchored to today, not to the newest row.
+
+    With latest_night as the anchor, collection stopping froze the anchor
+    too: the only Wizz row was from January and it still read healthy.
+    """
+    from datetime import date
+
+    from fastapi.testclient import TestClient
+
+    from app import db as dbm
+    from app.api import create_app
+    from app.providers.base import Observation
+
+    cfg = load_config(ROOT / "config.yaml")
+    cfg.base_dir = tmp_path
+    conn = dbm.init_db(tmp_path / "data" / "radar.db")
+    # nothing has been collected for months, from ANY source
+    dbm.upsert_observations(conn, "autumn-2026", [Observation(
+        origin="TLL", destination="FCO", out_date=date(2026, 10, 26),
+        back_date=date(2026, 11, 1), price_adult_eur=100.0, source="wizzair",
+        estimated_family_eur=400.0, is_direct=True)], seats=4,
+        night="2026-01-01")
+    conn.close()
+
+    states = {p["name"]: p["state"] for p in
+              TestClient(create_app(cfg)).get("/api/system").json()["providers"]}
+    assert states["Wizz Air"] == "stale", \
+        "a frozen anchor must not certify a dead collection as healthy"
+    assert states["airBaltic"] == "idle"
