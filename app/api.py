@@ -46,14 +46,16 @@ def _best_payload(cfg: Config, h, row: dict | None) -> dict | None:
     from datetime import date
     out = date.fromisoformat(row["out_date"])
     back = date.fromisoformat(row["back_date"])
-    sd = h.school_days_needed(out, back, cfg.public_holidays)
+    sd_before, sd_after = h.school_days_breakdown(out, back, cfg.public_holidays)
     return {
         "family_eur": row["estimated_family_eur"],
         "adult_eur": row["price_adult_eur"],
         "out_date": row["out_date"], "back_date": row["back_date"],
         "nights": (back - out).days,
         "is_direct": None if row["is_direct"] is None else bool(row["is_direct"]),
-        "school_days": sd,
+        "school_days": sd_before + sd_after,
+        "school_days_before": sd_before,
+        "school_days_after": sd_after,
         "source": row["source"], "price_basis": row["price_basis"],
         "observed_at": row["observed_at"],
     }
@@ -120,7 +122,11 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 "counts": counts, "best": payload,
             })
         conn.close()
-        return {"latest_night": night, "holidays": out}
+        return {"latest_night": night,
+                "origins": [{"code": o.code, "handicap_eur": o.handicap_eur,
+                             "extra_time_h": o.extra_time_h, "note": o.note}
+                            for o in cfg.origins],
+                "holidays": out}
 
     @app.get("/api/holidays/{holiday_id}/watches")
     def watches(holiday_id: str):
@@ -144,10 +150,13 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                                       best_rows.get((w["origin"], w["destination"]))),
             })
         conn.close()
-        # cheapest priced first, then 1-stop/blind/dormant tails
-        order = {"covered_direct": 0, "covered_1stop": 1, "blind": 2, "dormant": 3}
-        rows.sort(key=lambda r: (order.get(r["coverage_class"], 9),
-                                 r["best"]["family_eur"] if r["best"] else 1e9))
+        # cheapest family price first regardless of direct/1-stop;
+        # unpriced rows (blind, then dormant) tail the list
+        tail = {"blind": 0, "dormant": 1}
+        rows.sort(key=lambda r: (
+            r["best"] is None,
+            r["best"]["family_eur"] if r["best"]
+            else tail.get(r["coverage_class"], 2)))
         return {"holiday": holiday_id, "latest_night": night, "watches": rows}
 
     return app

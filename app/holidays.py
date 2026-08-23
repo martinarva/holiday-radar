@@ -61,11 +61,12 @@ class Holiday:
         r0, r1 = self.return_window()
         return d0 <= out <= d1 and r0 <= back <= r1
 
-    def school_days_needed(self, out: date, back: date,
-                           public_holidays: frozenset[date] = frozenset()) -> int:
-        """Actual school days this date pair costs: weekdays before the break
-        start / after the break end, minus public holidays (school is off
-        anyway). The radar reports this; the human decides."""
+    def school_days_breakdown(self, out: date, back: date,
+                              public_holidays: frozenset[date] = frozenset()
+                              ) -> tuple[int, int]:
+        """(before, after): school days this pair costs before the break
+        starts vs after it ends — weekdays that are not public holidays.
+        The radar reports this honestly; the human decides."""
         def school_days(a: date, b: date) -> int:   # inclusive range
             n, d = 0, a
             while d <= b:
@@ -74,9 +75,13 @@ class Holiday:
                 d += timedelta(days=1)
             return n
 
-        n = 0
-        if out < self.start:
-            n += school_days(out, self.start - timedelta(days=1))
-        if back > self.end:
-            n += school_days(self.end + timedelta(days=1), back)
-        return n
+        before = school_days(out, self.start - timedelta(days=1)) \
+            if out < self.start else 0
+        after = school_days(self.end + timedelta(days=1), back) \
+            if back > self.end else 0
+        return before, after
+
+    def school_days_needed(self, out: date, back: date,
+                           public_holidays: frozenset[date] = frozenset()) -> int:
+        before, after = self.school_days_breakdown(out, back, public_holidays)
+        return before + after

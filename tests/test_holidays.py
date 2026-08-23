@@ -61,3 +61,11 @@ def test_custom_flex_and_duration():
     pairs = list(xmas.date_pairs())
     assert pairs
     assert all(10 <= (b - a).days <= 18 for a, b in pairs)
+
+
+def test_school_days_breakdown_before_vs_after():
+    # Fri 23.10 out = 1 before; Mon-Wed 2-4.11 back = 3 after
+    assert AUTUMN_2026.school_days_breakdown(
+        date(2026, 10, 23), date(2026, 11, 4)) == (1, 3)
+    assert AUTUMN_2026.school_days_breakdown(
+        date(2026, 10, 25), date(2026, 11, 1)) == (0, 0)
