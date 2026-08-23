@@ -412,16 +412,13 @@ The human decides ("€300 cheaper, but 9 h of extra logistics with two kids?").
 - **E1 — foundation.** The carrier recon is DONE (outcome in §4C; scorecard
   in docs/carrier-recon.md; no further carrier recons planned). Remaining E1
   order (review 2026-08-23):
-  - **E1-A — airBaltic pairing spike** (blocks the adapter): lock the
-    out/in semantics with a deterministic test — one route, 3 differently
-    priced outbound days, identical inbound window per outbound, diff the
-    full inbound responses; repeat on a second route; also sniff which
-    request the UI fires after clicking a concrete outbound day. If the
-    inbound grid is independent → `indicative_rt = outbound_leg +
-    inbound_leg`; if it depends on the selected outbound → candidates must
-    be generated through real pairing. Either way the Observation carries
-    `price_basis = adult_leg` — never a fake-precise family estimate
-    (passenger-composition support in `/fsf` to be checked too).
+  - **E1-A — airBaltic pairing spike: CLOSED (2026-08-23).** Deterministic
+    test (2 routes × 3 differently priced outbounds × identical inbound
+    window, md5 diff + no-param control): the **inbound grid is independent
+    of outbound selection** ⇒ `indicative_rt = outbound_leg + inbound_leg`;
+    `/fsf` ignores passenger composition ⇒ `price_basis = adult_leg` (family
+    numbers are explicit upper-bound estimates). Side finding: TLL→TFS is
+    seasonally DIRECT on airBaltic. Details: docs/carrier-recon.md.
   - **E1-B** — airBaltic adapter + Ryanair duration-bounds fix → two real
     stage-A providers.
   - **E1-C** — watchlist derivation skeleton (no climate yet).

@@ -86,6 +86,22 @@ watch coverage (of our origins × 43-destination pool).
 Google sampler (+ hosted SERP backups for verify).** Two carrier adapters,
 both open JSON, covering the bulk of Baltic leisure traffic.
 
+### E1-A pairing spike (2026-08-23) — CLOSED
+
+Deterministic test per review: 2 routes (RIX→AGP, TLL→TFS) × 3 differently
+priced outbound days (cheap/median/expensive) → identical inbound window,
+full-response md5 diff, plus a no-`outboundDate` control:
+
+- **Inbound grid is INDEPENDENT of outbound selection** — one identical hash
+  per route across all four variants ⇒ `indicative_rt = outbound_leg +
+  inbound_leg`. The `outboundPrice` field inside inbound entries is a
+  constant context value (cheapest default-window outbound), ignorable.
+- **Passenger composition (`adults=2&children=2`) is ignored** by `/fsf` ⇒
+  Observations carry `price_basis = adult_leg`; any family number derived
+  from it is an explicit upper-bound estimate, never presented as precise.
+- Side finding: airBaltic flies **TLL→TFS direct** seasonally (e.g. €214.99
+  on 2026-10-30); TLL is not purely via-RIX for the pool after all.
+
 Honesty note on the admitted sources: both are unofficial-but-open JSON
 endpoints the carriers' own sites use. Checked 2026-08-23: neither is
 disallowed by robots.txt (airbaltic.com disallows only `/*?language=*`;
