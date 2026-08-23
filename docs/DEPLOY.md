@@ -132,8 +132,18 @@ stale — otherwise a €12 wobble on a €2000 trip would buzz every morning.
 
 1. In Home Assistant, create an automation with a **Webhook** trigger and
    copy its URL (`https://<ha-host>/api/webhook/<id>`).
-2. Put it in `.env` on the server as `HA_WEBHOOK_URL=` and restart the
-   scheduler. Without it the radar runs exactly as before and sends nothing.
+2. Put it in `.env` on the server as `HA_WEBHOOK_URL=` — the real host and
+   id, not a placeholder — then **recreate** the containers:
+
+   ```bash
+   docker compose up -d --force-recreate
+   ```
+
+   Plain `docker compose up -d` reports "Running" and changes nothing when
+   only `.env` differs. Secrets reach the containers via the `env_file:`
+   directive; without it compose uses `.env` merely to substitute `${...}`
+   inside the compose file, and the process itself sees nothing.
+   With no webhook the radar runs exactly as before and sends nothing.
 3. Check the plumbing without waiting for a real price drop:
 
 ```bash

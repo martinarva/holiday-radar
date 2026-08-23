@@ -11,6 +11,11 @@ services:
     image: holiday-radar:latest
     container_name: holiday-radar-web
     restart: unless-stopped
+    # Compose reads .env for ${...} substitution in THIS file; env_file is
+    # what actually puts the secrets inside the container. Without it
+    # HA_WEBHOOK_URL and the SERP keys are silently absent at runtime.
+    env_file:
+      - .env
     environment:
       TZ: ${TZ:-Europe/Tallinn}
     ports:
@@ -25,6 +30,8 @@ services:
     image: holiday-radar:latest
     container_name: holiday-radar-scheduler
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       TZ: ${TZ:-Europe/Tallinn}
     volumes:
