@@ -186,10 +186,13 @@ Checked 2026-08-23:
   JSON their own sites use, honestly bookable fares.
 - **Google Flights polite sampling** (fast-flights) for watches the carriers
   don't cover: 2–3 rotating date pairs per watch per week — the full window
-  gets swept over days while nightly volume stays low.
-- **Travelpayouts** — hint layer only (free, `transfers ≤ 1`), never the
-  primary signal; **SerpAPI** stays the stage-B backup (250/mo ≈ verify
-  budget).
+  gets swept over days while nightly volume stays low. The sampler is
+  **coverage-aware from day one**: a watch with a fresh carrier signal needs
+  less Google; a completely blind watch gets priority from the sampling
+  budget — the same request volume, spent smarter.
+- **Travelpayouts** — strictly **optional** hint layer (free, `transfers ≤ 1`),
+  never a dependency: with no token, or with TP gone entirely, the radar runs
+  identically. **SerpAPI** stays the stage-B backup (250/mo ≈ verify budget).
 
 ### D. Verify, deal score and thresholds
 
@@ -333,9 +336,14 @@ The human decides ("€300 cheaper, but 9 h of extra logistics with two kids?").
   book, so they'd generate false super-deal alerts that verify then kills.
   Consequence: stage A rebuilt around carrier sources (see §4C); TP demoted
   to a hint layer. **E1 is unblocked.**
-- **E1 — foundation:** config model, holiday presets 2026–2030, destination
-  pool (~40–70), Open-Meteo normals, watchlist derivation + a preview
-  ("what I would watch and why" — climate justification per row).
+- **E1 — foundation:** opens with a **carrier mini-gate** for airBaltic,
+  Norwegian and Finnair — `endpoint exists → window query possible → prices
+  sane → parser test → adapter in`. A carrier that fails the gate routes its
+  coverage to the Google sampler; we do not place another TP-style
+  architectural bet on an unproven source. Then: config model, holiday
+  presets 2026–2030, destination pool (~40–70), Open-Meteo normals,
+  watchlist derivation + a preview ("what I would watch and why" — climate
+  justification per row).
 - **E2 — radar:** stage-A pipeline + history + dashboard price table with
   trends.
 - **E3 — verify + alerts:** stage B, deal score, thresholds, HA device +
@@ -387,7 +395,13 @@ Confirmed 2026-08-23 (owner):
    Stage A = Ryanair + carrier low-fare calendars (airBaltic, Norwegian,
    Finnair — E1 spikes) + polite Google sampling; TP kept as a filtered hint
    layer only.
-9. **External review accepted (2026-08-23):** provider-agnostic observation
+9. **E1 directives (owner, 2026-08-23, E0 closed at confidence 0.98):**
+   stage A is *carrier-first discovery* (Ryanair + airBaltic + Norwegian +
+   Finnair → Google rotating sampler); each new carrier passes the mini-gate
+   before its adapter lands; the Google sampler is coverage-aware from the
+   start; Travelpayouts is an optional hint provider — not a fallback, not a
+   dependency.
+10. **External review accepted (2026-08-23):** provider-agnostic observation
    model with `days_to_departure` stored from day one; top-K date pairs sent
    to verify; three-state climate (eligible/marginal/excluded) with a 0–10
    climate score as a ranking signal (hard filter opt-in); verification
