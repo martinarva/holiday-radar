@@ -166,8 +166,8 @@ class GoogleFlights:
                 legs.append(f"{fa}-{ta}")
                 details.append({
                     "from": fa, "to": ta,
-                    "departure": _as_text(getattr(sf, "departure", None)),
-                    "arrival": _as_text(getattr(sf, "arrival", None)),
+                    "departure": _as_time(getattr(sf, "departure", None)),
+                    "arrival": _as_time(getattr(sf, "arrival", None)),
                     "duration": _as_text(getattr(sf, "duration", None)),
                     "plane": _as_text(getattr(sf, "plane_type", None)),
                 })
@@ -179,6 +179,30 @@ class GoogleFlights:
                 legs=tuple(legs), leg_details=tuple(details),
             ))
         return sorted(offers, key=lambda o: o.price_total_eur)
+
+
+_SDT_RE = re.compile(r"date=\((\d+),\s*(\d+),\s*(\d+)\).*?time=\((\d+),\s*(\d+)\)")
+
+
+def _as_time(v) -> str | None:
+    """fast-flights hands back a SimpleDatetime; normalize to ISO minutes.
+
+    NOTE: for a round-trip query Google lists only the OUTBOUND itinerary's
+    legs (the return is picked in a second step on their site), so these are
+    outbound times. Return times come from carriers that publish them
+    (Ryanair) — see providers/ryanair.py.
+    """
+    if v is None:
+        return None
+    d, t = getattr(v, "date", None), getattr(v, "time", None)
+    if isinstance(d, (tuple, list)) and isinstance(t, (tuple, list)) and len(d) == 3:
+        return (f"{d[0]:04d}-{d[1]:02d}-{d[2]:02d}"
+                f"T{(t[0] or 0):02d}:{(t[1] or 0):02d}")
+    m = _SDT_RE.search(str(v))
+    if m:
+        y, mo, dd, hh, mi = (int(x) for x in m.groups())
+        return f"{y:04d}-{mo:02d}-{dd:02d}T{hh:02d}:{mi:02d}"
+    return str(v)
 
 
 def _as_text(v) -> str | None:

@@ -42,6 +42,11 @@ def routes(airport: str) -> list[dict]:
     return out
 
 
+def _iso_min(v) -> str | None:
+    """"2026-10-26T06:40:00" -> "2026-10-26T06:40"."""
+    return str(v)[:16] if v else None
+
+
 def parse_round_trip_fares(data: dict, origin: str) -> list[Observation]:
     """Pure parser, unit-testable without network."""
     obs: list[Observation] = []
@@ -50,6 +55,15 @@ def parse_round_trip_fares(data: dict, origin: str) -> list[Observation]:
             ob, ib = f["outbound"], f["inbound"]
             arr = ob["arrivalAirport"]
             value = float(f["summary"]["price"]["value"])
+            # Ryanair publishes both directions' clock times — the only stage-A
+            # source that does (Google lists outbound legs only for a
+            # round-trip query; airBaltic's calendar is date-resolution).
+            times = {
+                "out_departure": _iso_min(ob.get("departureDate")),
+                "out_arrival": _iso_min(ob.get("arrivalDate")),
+                "in_departure": _iso_min(ib.get("departureDate")),
+                "in_arrival": _iso_min(ib.get("arrivalDate")),
+            }
             obs.append(Observation(
                 origin=origin.upper(),
                 destination=arr["iataCode"],
@@ -63,6 +77,8 @@ def parse_round_trip_fares(data: dict, origin: str) -> list[Observation]:
                 source_price=value,
                 # the fare finder prices Ryanair's own point-to-point network
                 is_direct=True,
+                raw={"times": times, "flight_numbers": [
+                    ob.get("flightNumber"), ib.get("flightNumber")]},
             ))
         except (KeyError, TypeError, ValueError):
             continue    # one malformed fare must not kill the batch
