@@ -28,8 +28,10 @@ aborts the run (fail-soft, errors recorded on the run row).
 """
 from __future__ import annotations
 
+import concurrent.futures as cf
 import json
 import random
+import threading
 import time
 from datetime import date, datetime, timezone
 
@@ -117,6 +119,7 @@ def offer_to_observation(cfg: Config, offer) -> Observation:
 
 def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 audit_budget: int = 2, verify_budget: int = 5,
+                pairs_per_watch: int = 1, workers: int = 1,
                 log=print, sleep_s: float = 0.12, google_pace_s: float = 0.0,
                 google_search=None, collect=None,
                 rng: random.Random | None = None) -> dict:
@@ -162,9 +165,14 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
 
     if google_search is None:
         from app.providers.google_flights import GoogleFlights
-        gf = GoogleFlights(currency=cfg.currency)
+        # one client (and cookie jar) PER THREAD — the consent handshake and
+        # its jar are not safe to share across concurrent requests
+        _local = threading.local()
 
         def google_search(o, dst, od, bd):
+            gf = getattr(_local, "gf", None)
+            if gf is None:
+                gf = _local.gf = GoogleFlights(currency=cfg.currency)
             return gf.search_round_trip(
                 o, dst, od, bd,
                 adults=cfg.passengers.adults, children=cfg.passengers.children)
@@ -187,39 +195,90 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                                       today, last_night_of(r), rng))
     queue = floor_due + rest
 
-    used_discovery = 0
-    google_hits: list[tuple] = []      # (row, Observation)
+    # --- build the task list: (watch, date pair) ---
+    # pairs_per_watch = 0 means the FULL grid every night. Measured: Google
+    # answers in ~1.8 s and tolerates 6 concurrent clients (0.5 s effective),
+    # so ~5.6k queries land in well under an hour — no reason to leave the
+    # date grid half-sampled when the source is free and unmetered.
+    tasks: list[tuple] = []
     for r in queue:
-        if used_discovery >= google_budget:
-            break
         h = hols[r.holiday_id]
         s = state.get((r.holiday_id, r.origin, r.destination)) or {}
-        pair, new_idx, cls = pick_pair(h, cfg.public_holidays,
-                                       int(s.get("rotation_idx") or 0))
-        if pair is None:
-            continue
-        used_discovery += 1            # a failed query still spends budget
-        dbm.sampler_state_upsert(conn, r.holiday_id, r.origin, r.destination,
-                                 new_idx, night)
+        idx = int(s.get("rotation_idx") or 0)
+        if pairs_per_watch <= 0:
+            for pair in h.date_pairs():
+                tasks.append((r, pair))
+            idx += 1
+        else:
+            for _ in range(pairs_per_watch):
+                pair, idx, _cls = pick_pair(h, cfg.public_holidays, idx)
+                if pair is None:
+                    break
+                tasks.append((r, pair))
         state[(r.holiday_id, r.origin, r.destination)] = {
-            "rotation_idx": new_idx, "last_google_night": night}
-        try:
-            offers = google_search(r.origin, r.destination, pair[0], pair[1])
-        except ProviderError as e:
-            errors.append(f"google discovery {r.origin}-{r.destination}: {e}")
-            continue
-        if offers:
-            # keep the cheapest as the watch's observation AND every returned
-            # itinerary (airlines, routings, stop counts) in `offers`
-            dbm.upsert_offers(conn, r.holiday_id, offers, seats,
-                              role="discovery")
-            o = offer_to_observation(cfg, offers[0])
-            dbm.upsert_observations(conn, r.holiday_id, [o], seats,
-                                    role="discovery")
-            google_hits.append((r, o))
-        time.sleep(pace)
-    log(f"discovery: {used_discovery}/{google_budget} queries "
-        f"({len(floor_due)} floor-due), {len(google_hits)} priced")
+            "rotation_idx": idx, "last_google_night": night}
+    if google_budget:
+        tasks = tasks[:google_budget]
+
+    best_per_watch: dict[tuple, Observation] = {}
+    used_discovery = 0
+    log(f"discovery: {len(tasks)} queries over {len(queue)} watches "
+        f"({'full grid' if pairs_per_watch <= 0 else f'{pairs_per_watch}/watch'}), "
+        f"{workers} workers")
+
+    def _run(task):
+        r, pair = task
+        return task, google_search(r.origin, r.destination, pair[0], pair[1])
+
+    def _handle(task, offers, err):
+        nonlocal used_discovery
+        used_discovery += 1            # a failed query still spends budget
+        r, _pair = task
+        if err is not None:
+            errors.append(f"google discovery {r.origin}-{r.destination}: {err}")
+            return
+        if not offers:
+            return
+        dbm.upsert_offers(conn, r.holiday_id, offers, seats, role="discovery")
+        o = offer_to_observation(cfg, offers[0])
+        dbm.upsert_observations(conn, r.holiday_id, [o], seats, role="discovery")
+        k = (r.holiday_id, r.origin, r.destination)
+        if k not in best_per_watch or o.price_adult_eur < best_per_watch[k].price_adult_eur:
+            best_per_watch[k] = o
+
+    if workers > 1 and tasks:
+        # DB writes stay on this thread; only the HTTP work is parallel
+        with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(_run, t): t for t in tasks}
+            for i, fut in enumerate(cf.as_completed(futs), 1):
+                task = futs[fut]
+                try:
+                    task, offers = fut.result()
+                    _handle(task, offers, None)
+                except ProviderError as e:
+                    _handle(task, None, e)
+                except Exception as e:                  # never abort the run
+                    _handle(task, None, e)
+                if i % 250 == 0:
+                    log(f"  ... {i}/{len(tasks)} queries, "
+                        f"{len(best_per_watch)} watches priced")
+    else:
+        for task in tasks:
+            try:
+                _, offers = _run(task)
+                _handle(task, offers, None)
+            except ProviderError as e:
+                _handle(task, None, e)
+            time.sleep(pace)
+
+    for (hid, og, dst), st in state.items():
+        dbm.sampler_state_upsert(conn, hid, og, dst, st["rotation_idx"],
+                                 st.get("last_google_night"))
+    rows_by_key = {(r.holiday_id, r.origin, r.destination): r for r in queue}
+    google_hits = [(rows_by_key[k], o) for k, o in best_per_watch.items()
+                   if k in rows_by_key]
+    log(f"discovery: {used_discovery} queries done, "
+        f"{len(google_hits)} watches priced ({len(floor_due)} floor-due)")
 
     # --- audit: separate small budget over carrier-covered watches ---
     covered = [r for r in relevant
@@ -343,6 +402,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
     summary = {
         "night": night, "carrier_observations": carrier_obs,
         "discovery_used": used_discovery, "discovery_budget": google_budget,
+        "pairs_per_watch": pairs_per_watch,
         "discovery_priced": len(google_hits),
         "floor_due": len(floor_due), "blind_queue": len(blind),
         "audit_used": used_audit, "audit_budget": audit_budget,

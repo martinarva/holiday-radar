@@ -1,0 +1,39 @@
+# holiday-radar — runs beside the other services on the home server.
+# Two containers from one image sharing ./data:
+#   web       read-only UI/API (SQLite snapshot only, no network calls)
+#   scheduler the nightly full-grid collection
+#
+# Reverse proxy: this only publishes a port; radar.arvahome.org is mapped to
+# it by the nginx host (see docs/DEPLOY.md).
+services:
+  web:
+    build: .
+    image: holiday-radar:latest
+    container_name: holiday-radar-web
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Tallinn}
+    ports:
+      - "${RADAR_PORT:-8770}:8765"
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+      - ./presets:/app/presets:ro
+
+  scheduler:
+    build: .
+    image: holiday-radar:latest
+    container_name: holiday-radar-scheduler
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Tallinn}
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+      - ./presets:/app/presets:ro
+    command: ["python", "-m", "app.cli", "run-scheduler"]
+    # the image's HTTP healthcheck belongs to the web role only
+    healthcheck:
+      disable: true
+    depends_on:
+      - web

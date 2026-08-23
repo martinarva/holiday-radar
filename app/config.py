@@ -191,7 +191,8 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         relative_deal=raw.get("relative_deal", {}),
         providers=raw.get("providers", {}),
         scheduler=raw.get("scheduler", {}),
-        sampler={"google_budget": 260, "audit_budget": 4, "verify_budget": 8,
-                 "pace_seconds": 6, **(raw.get("sampler") or {})},
+        sampler={"google_budget": 0, "pairs_per_watch": 0, "workers": 6,
+                 "audit_budget": 6, "verify_budget": 10, "pace_seconds": 0,
+                 **(raw.get("sampler") or {})},
         base_dir=base,
     )

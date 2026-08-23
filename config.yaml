@@ -80,8 +80,19 @@ scheduler: {timezone: Europe/Tallinn, screen_cron: "45 2 * * *", verify_top_n: 8
 # the date grid still fills in over time). fast-flights is free; the real
 # constraint is politeness, handled by pace_seconds spreading the run over
 # hours rather than hammering.
+# fast-flights (github.com/AWeirdDev/flights) is the engine — free, keyless,
+# no quota. SerpApi/SearchApi are standby only and have run zero queries.
+# fast-flights has NO date-grid call: one query = one date pair, so wider
+# coverage simply means more queries. Google itself answers in ~6 s, which is
+# most of the pacing already; pace_seconds adds a little on top.
 sampler:
-  google_budget: 260        # >= active blind watches (223 today, headroom)
-  audit_budget: 4           # carrier-covered re-checks -> carrier_vs_google_delta
-  verify_budget: 8          # candidates at <= 1.25x buy threshold
-  pace_seconds: 6           # gap between Google queries (~26 min per 260)
+  pairs_per_watch: 0        # 0 = the FULL date grid for every blind watch,
+                            # every night (owner decision). Measured: Google
+                            # answers in ~1.8 s and tolerates 6 concurrent
+                            # clients (~0.5 s effective), so ~5.6k queries
+                            # finish in well under an hour.
+  workers: 6                # parallel Google clients (own cookie jar each)
+  google_budget: 0          # 0 = no cap; set a number to throttle a night
+  audit_budget: 6           # carrier-covered re-checks -> carrier_vs_google_delta
+  verify_budget: 10         # candidates at <= 1.25x buy threshold
+  pace_seconds: 0           # only used in single-worker mode

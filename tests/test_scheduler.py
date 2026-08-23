@@ -286,3 +286,37 @@ def test_airbaltic_candidate_still_flight_verified(cfg, tmp_path):
     conn = dbm.init_db(dbfile)
     row = conn.execute("SELECT * FROM verifications").fetchone()
     assert row["level"] == "flight-verified" and row["price_total_eur"] == 505.0
+
+
+def test_pairs_per_watch_multiplies_queries_and_advances_rotation(cfg, tmp_path):
+    """fast-flights has no grid call and no quota, so wider coverage means
+    more queries per watch — and each must be a DIFFERENT date pair."""
+    dbfile = tmp_path / "r.db"
+    g = _fake_google()
+    s = run_nightly(cfg, dbfile, google_budget=30, audit_budget=0,
+                    verify_budget=0, pairs_per_watch=3,
+                    collect=_fake_collect(cfg, n_blind=4, n_covered=0,
+                                          dormant=0),
+                    google_search=g, sleep_s=0, log=lambda *_: None,
+                    rng=random.Random(9))
+    assert s["discovery_used"] == 12          # 4 watches x 3 pairs
+    assert s["pairs_per_watch"] == 3
+    # the three queries for one watch hit three distinct date pairs
+    per_watch = {}
+    for og, dst, o, b in g.calls:
+        per_watch.setdefault(dst, set()).add((o, b))
+    assert all(len(v) == 3 for v in per_watch.values())
+    conn = dbm.init_db(dbfile)
+    assert all(st["rotation_idx"] == 3
+               for st in dbm.sampler_state_all(conn).values())
+
+
+def test_budget_still_caps_multi_pair_sampling(cfg, tmp_path):
+    g = _fake_google()
+    s = run_nightly(cfg, tmp_path / "r.db", google_budget=7, audit_budget=0,
+                    verify_budget=0, pairs_per_watch=3,
+                    collect=_fake_collect(cfg, n_blind=10, n_covered=0,
+                                          dormant=0),
+                    google_search=g, sleep_s=0, log=lambda *_: None,
+                    rng=random.Random(9))
+    assert s["discovery_used"] == 7 and len(g.calls) == 7

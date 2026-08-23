@@ -244,6 +244,12 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
 
     states = {(r["origin"], r["destination"]): dict(r) for r in conn.execute(
         "SELECT * FROM watch_state WHERE holiday_id=?", (holiday.id,))}
+    # "still scanning" is a lie once we HAVE asked and Google returned nothing
+    # for the sampled dates — distinguish queued from genuinely no-flights.
+    sampled = {(r["origin"], r["destination"]): r["last_google_night"]
+               for r in conn.execute(
+                   "SELECT origin, destination, last_google_night "
+                   "FROM sampler_state WHERE holiday_id=?", (holiday.id,))}
 
     dests: dict[str, list[str]] = {}
     for (og, dst) in states:
@@ -275,12 +281,17 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
 
         dormant = all(states[(c, dst)]["dormant"] for c in origin_codes)
         if not options:
+            ever_sampled = any(sampled.get((c, dst)) for c in origin_codes)
+            state = ("dormant" if dormant
+                     else "no_flights_found" if ever_sampled else "scanning")
             out.append({
                 "holiday_id": holiday.id, "destination": dst,
                 "destination_name": dest_cfg.name if dest_cfg else dst,
                 "country": dest_cfg.country if dest_cfg else "",
                 "tier": dest_cfg.tier if dest_cfg else "",
-                "climate": clim, "state": "dormant" if dormant else "scanning",
+                "climate": clim, "state": state,
+                "last_checked": next((sampled.get((c, dst)) for c in origin_codes
+                                      if sampled.get((c, dst))), None),
                 "origin_options": [], "best_option": None,
                 "cheapest_option": None, "zero_school_option": None,
                 "recommendation_score": None, "market_score": None,
@@ -343,8 +354,11 @@ def holiday_summary(cfg: Config, conn, holiday: Holiday,
                     opportunities: list[dict]) -> dict:
     priced = [o for o in opportunities if o["state"] == "priced"]
     scanning = [o for o in opportunities if o["state"] == "scanning"]
+    no_flights = [o for o in opportunities if o["state"] == "no_flights_found"]
     dormant = [o for o in opportunities if o["state"] == "dormant"]
-    total = len(opportunities) or 1
+    # coverage = how much of what CAN be priced has been; destinations nothing
+    # flies to are answered, not missing
+    answerable = len(priced) + len(scanning) or 1
     best = max(priced, key=lambda o: o["recommendation_score"]) if priced else None
     # Best match and cheapest are different questions (UX-SPEC §9) — a card
     # shows both so the ranking never hides a genuinely cheaper option.
@@ -356,8 +370,8 @@ def holiday_summary(cfg: Config, conn, holiday: Holiday,
         "days_away": (holiday.start - date.today()).days,
         "on_sale": not (dormant and not priced and not scanning),
         "priced": len(priced), "scanning": len(scanning),
-        "dormant": len(dormant),
-        "coverage_pct": round(len(priced) / total * 100),
+        "no_flights": len(no_flights), "dormant": len(dormant),
+        "coverage_pct": round(len(priced) / answerable * 100),
         "best": best,
         "cheapest": cheapest,
         "cheapest_is_best": bool(best and cheapest

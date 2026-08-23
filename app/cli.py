@@ -223,10 +223,27 @@ def cmd_nightly(cfg: Config, args) -> None:
         else s["audit_budget"],
         verify_budget=args.verify_budget if args.verify_budget is not None
         else s["verify_budget"],
-        google_pace_s=s.get("pace_seconds", 6))
+        pairs_per_watch=args.pairs_per_watch if args.pairs_per_watch is not None
+        else s.get("pairs_per_watch", 0),
+        workers=args.workers if args.workers is not None else s.get("workers", 6),
+        google_pace_s=s.get("pace_seconds", 0))
     print("\n=== NIGHTLY SUMMARY ===")
     for k, v in summary.items():
         print(f"  {k}: {v}")
+
+
+def cmd_run_scheduler(cfg: Config, args) -> None:
+    """Long-running nightly daemon (the container's scheduler role)."""
+    from app.daemon import run_forever
+    s = cfg.sampler
+    run_forever(cfg, cfg.base_dir / args.db,
+                max_runs=args.max_runs,
+                google_budget=s.get("google_budget", 0),
+                audit_budget=s.get("audit_budget", 6),
+                verify_budget=s.get("verify_budget", 10),
+                pairs_per_watch=s.get("pairs_per_watch", 0),
+                workers=s.get("workers", 6),
+                google_pace_s=s.get("pace_seconds", 0))
 
 
 def cmd_serve(cfg: Config, args) -> None:
@@ -282,6 +299,15 @@ def main(argv: list[str] | None = None) -> None:
                     help="override config sampler.google_budget")
     pn.add_argument("--audit-budget", type=int, default=None)
     pn.add_argument("--verify-budget", type=int, default=None)
+    pn.add_argument("--pairs-per-watch", type=int, default=None,
+                    help="date pairs per watch per night (0 = full grid)")
+    pn.add_argument("--workers", type=int, default=None,
+                    help="parallel Google clients")
+
+    prs = sub.add_parser("run-scheduler",
+                         help="nightly daemon: waits for the cron slot and runs")
+    prs.add_argument("--db", default="data/radar.db")
+    prs.add_argument("--max-runs", type=int, default=None)
 
     psv = sub.add_parser("serve", help="dev UI + JSON API (reads DB only)")
     psv.add_argument("--port", type=int, default=8765)
@@ -327,6 +353,7 @@ def main(argv: list[str] | None = None) -> None:
          "dry-run": cmd_dry_run,
          "coverage-report": cmd_coverage_report,
          "nightly": cmd_nightly,
+         "run-scheduler": cmd_run_scheduler,
          "serve": cmd_serve,
          "probe-google": cmd_probe_google,
          "probe-travelpayouts": cmd_probe_tp,

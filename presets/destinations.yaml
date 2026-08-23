@@ -3,6 +3,12 @@
 # from the Baltics: short <= 4.5 h, medium 4.5-7 h, long > 7 h / 1-stop.
 # The watchlist is DERIVED from this pool by climate rules — nothing here is
 # watched unconditionally. Notes flag family-relevant caveats honestly.
+#
+# The pool is DESTINATION-driven, not carrier-driven (owner, 2026-08-23):
+# we fly with whoever is cheapest, and the Google sampler prices every
+# airline including one-stop connections. Reviewed 2026-08-23 against the
+# real airBaltic and Ryanair network maps plus the published TLL/HEL/RIX
+# 2026 schedules; gaps found there were added below.
 
 destinations:
   # --- Spain (owner must-haves first) ---
@@ -58,3 +64,25 @@ destinations:
   - {iata: ZNZ, name: "Zanzibar",        country: TZ, lat: -6.22,  lon: 39.22,  tier: long,   tags: [beach], notes: "malaria area — check prophylaxis with kids"}
   - {iata: CPT, name: "Cape Town",       country: ZA, lat: -33.97, lon: 18.60,  tier: long,   tags: [city, nature], notes: "their summer = our winter; sea stays cold"}
   - {iata: SID, name: "Sal (Cape Verde)", country: CV, lat: 16.74, lon: -22.95, tier: long,   tags: [beach]}
+
+  # --- added 2026-08-23 after the network review: real direct routes from
+  # TLL/RIX/HEL that the first pool missed ---
+  - {iata: TIA, name: "Tirana",          country: AL, lat: 41.41,  lon: 19.72,  tier: short,  tags: [city, beach], notes: "direct TLL + RIX; cheap, warm shoulder season"}
+  - {iata: SKG, name: "Thessaloniki",    country: GR, lat: 40.52,  lon: 22.97,  tier: short,  tags: [city, beach], notes: "direct HEL + RIX (Halkidiki beaches)"}
+  - {iata: TIV, name: "Tivat (Montenegro)", country: ME, lat: 42.40, lon: 18.72, tier: short, tags: [beach, city], notes: "direct RIX"}
+  - {iata: MAD, name: "Madrid",          country: ES, lat: 40.47,  lon: -3.56,  tier: short,  tags: [city], notes: "direct RIX; big hub, cheap 1-stop from everywhere"}
+  - {iata: NCE, name: "Nice",            country: FR, lat: 43.66,  lon: 7.21,   tier: short,  tags: [beach, city], notes: "direct TLL"}
+  - {iata: OLB, name: "Olbia (Sardinia)", country: IT, lat: 40.90, lon: 9.52,   tier: short,  tags: [beach], notes: "direct RIX (seasonal)"}
+  - {iata: PSA, name: "Pisa (Tuscany)",  country: IT, lat: 43.68,  lon: 10.39,  tier: short,  tags: [city, beach], notes: "direct RIX"}
+  - {iata: CHQ, name: "Chania (Crete)",  country: GR, lat: 35.53,  lon: 24.15,  tier: short,  tags: [beach]}
+  - {iata: TBS, name: "Tbilisi",         country: GE, lat: 41.67,  lon: 44.95,  tier: medium, tags: [city], notes: "direct RIX; mild spring, very cheap on the ground"}
+
+  # --- warm winter/spring long-haul the owner asked for: US sun belt and the
+  # Caribbean. All 1-stop from TLL/RIX (HEL has direct US routes to
+  # Chicago/Dallas/LA/NY/Seattle, so connections are short) ---
+  - {iata: MCO, name: "Orlando",         country: US, lat: 28.43,  lon: -81.31, tier: long,   tags: [city, beach], notes: "theme parks; the classic family long-haul"}
+  - {iata: MIA, name: "Miami",           country: US, lat: 25.79,  lon: -80.29, tier: long,   tags: [beach, city]}
+  - {iata: TPA, name: "Tampa",           country: US, lat: 27.98,  lon: -82.53, tier: long,   tags: [beach, city], notes: "Gulf coast beaches, calmer than Miami"}
+  - {iata: LAS, name: "Las Vegas",       country: US, lat: 36.08,  lon: -115.15, tier: long,  tags: [city, nature], notes: "gateway to Grand Canyon / Zion road trips"}
+  - {iata: CUN, name: "Cancún",          country: MX, lat: 21.04,  lon: -86.87, tier: long,   tags: [beach], notes: "family resorts; peak season = our winter"}
+  - {iata: PUJ, name: "Punta Cana",      country: DO, lat: 18.57,  lon: -68.36, tier: long,   tags: [beach], notes: "all-inclusive belt; dry season Dec-Apr"}
