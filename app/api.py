@@ -207,10 +207,18 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             if k not in ladder or p["effective_eur"] < ladder[k]["effective_eur"]:
                 ladder[k] = p
         ladder_list = [ladder[k] for k in sorted(ladder)]
-        base = ladder_list[0]["effective_eur"] if ladder_list else None
+        # Difference against the no-school-days option, SIGNED: missing school
+        # sometimes saves money and sometimes costs more — the component is
+        # worthless if it only ever prints "—" (review 2026-08-23).
+        zero = next((p for p in ladder_list if p["school_days"] == 0), None)
+        base = zero["effective_eur"] if zero else None
         for p in ladder_list:
-            p["saving_vs_zero_eur"] = (round(base - p["effective_eur"], 2)
-                                       if base is not None else None)
+            if base is None or p is zero:
+                p["diff_vs_zero_school_eur"] = None
+            else:
+                d = round(p["effective_eur"] - base, 2)
+                p["diff_vs_zero_school_eur"] = d
+                p["saves_money"] = d < 0
 
         offers = []
         for og_code in {p["origin"] for p in pairs} or {o.code for o in cfg.origins}:

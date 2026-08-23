@@ -53,8 +53,8 @@ climate_rules:
   # shouldn't outscore everywhere else on temperature alone. Only cold, rain
   # or a missing sea can exclude. hot_penalty_from_c applies a mild nudge for
   # genuinely extreme heat with young children.
-  beach:     {min_day_max_c: 23, ideal_day_max_c: 26, hot_penalty_from_c: 34, min_sea_c: 21, max_rain_days: 8, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
-  warm_city: {min_day_max_c: 17, ideal_day_max_c: 24, hot_penalty_from_c: 32, max_rain_days: 9, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
+  beach:     {min_day_max_c: 23, ideal_day_max_c: 26, hot_penalty_from_c: 32, min_sea_c: 21, max_rain_days: 8, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
+  warm_city: {min_day_max_c: 17, ideal_day_max_c: 24, hot_penalty_from_c: 30, max_rain_days: 9, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
 
 # Family (2+2) round-trip totals, EUR, carry-on basis.
 tiers:

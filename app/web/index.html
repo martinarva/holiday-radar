@@ -134,11 +134,24 @@ const ago = h => h==null ? "" : h < 1 ? "just now" : h < 24 ? `${Math.round(h)}h
   : `${Math.round(h/24)}d ago`;
 const dfmt = s => new Date(s+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short"});
 
+// Qualitative on discovery screens; the number only appears in detail next
+// to its "Why?" (review: "fair 4.0" alone is meaningless to a person).
+const DEAL_CLS = {exceptional:"good", good:"good", fair:"fair",
+                  expensive:"grey", unknown:"grey"};
+function dealPill(o){
+  const k = o.deal_key || "unknown", l = o.deal_label || "price unknown";
+  return `<span class="pill ${DEAL_CLS[k]}">${k==="exceptional"?"🔥 ":""}${l}</span>`;
+}
 function scorePill(s){
   if(s==null) return `<span class="pill grey">collecting</span>`;
   const cls = s>=8 ? "good" : s>=6.5 ? "fair" : "grey";
-  const lbl = s>=8 ? "great match" : s>=6.5 ? "good match" : "fair";
-  return `<span class="pill ${cls}">${lbl} ${s.toFixed(1)}</span>`;
+  return `<span class="pill ${cls}">match ${s.toFixed(1)}/10</span>`;
+}
+function heroKicker(o){
+  const k = o.deal_key;
+  if(k === "exceptional") return {txt:"🔥 Exceptional deal", cls:"good"};
+  if(k === "good") return {txt:"🔥 Good deal", cls:"good"};
+  return {txt:"Best we've found so far", cls:"grey"};
 }
 function schoolChip(o){
   if(!o) return "";
@@ -174,10 +187,11 @@ async function viewRadar(el){
   if(d.hero && d.hero.best_option){
     const h = d.hero, b = h.best_option, m = b.market || {};
     const vs = m.vs_market_pct!=null ? `<div>↓ ${Math.abs(m.vs_market_pct)}% vs recent market</div>` : "";
+    const kick = heroKicker(h);
     el.append($(`<div class="hero" style="margin-top:18px">
-      <div class="row"><span class="kicker">Best right now</span>
+      <div class="row"><span class="kicker">${kick.txt}</span>
         <span class="tag">${esc(h.holiday.name)}</span>
-        <span style="margin-left:auto">${scorePill(h.recommendation_score)}</span></div>
+        <span style="margin-left:auto">${dealPill(h)}</span></div>
       <div style="margin-top:10px" class="row">
         <div style="flex:1;min-width:220px">
           <div class="mid">${esc(h.destination_name)}<span class="mut">, ${esc(h.country)}</span></div>
@@ -229,7 +243,7 @@ async function viewRadar(el){
     g.append($(`<div class="card"><h3>${esc(h.name)}</h3>
       <div class="mut small">${dfmt(h.start)} – ${dfmt(h.end)} · ${h.days_away} days away</div>
       ${bo ? `<div class="mut small" style="margin-top:12px">Best match</div>
-        <div class="row"><span class="mid">${esc(b.destination_name)}</span>${scorePill(b.recommendation_score)}</div>
+        <div class="row"><span class="mid">${esc(b.destination_name)}</span>${dealPill(b)}</div>
         <div class="big price">${eur(bo.effective_eur)}</div>
         <div class="small" style="margin:2px 0 2px">${climChip(b.climate)}</div>
         <div class="small"><b>${dfmt(bo.out_date)} → ${dfmt(bo.back_date)}</b>
@@ -266,15 +280,39 @@ async function viewRadar(el){
 }
 
 /* ---------------- Holiday detail ---------------- */
-const FILTERS = {sort:"best", origin:"any", stops:"any", school:"any"};
+const FILTERS = {sort:"best", origin:"any", stops:"any", school:"any", price:"any"};
+const PAGE = 10;
 async function viewHoliday(el, hid){
   const d = await j(`/api/holidays/${hid}/opportunities`);
   const h = d.holiday;
+  let expanded = false;
   el.innerHTML = "";
   el.append($(`<div><p class="sub" style="margin-top:22px"><a href="#/">← Radar</a></p>
     <h1>${esc(h.name)}</h1>
     <p class="sub">${dfmt(h.start)} – ${dfmt(h.end)} · ${h.days_away} days away ·
       <b>${h.priced} priced</b> · ${h.scanning} still scanning · coverage ${h.coverage_pct}%</p></div>`));
+
+  // Recommended vs Cheapest up front — two different questions (UX-SPEC §9)
+  const rb = h.best && h.best.best_option, cb = h.cheapest && h.cheapest.cheapest_option;
+  if(rb){
+    const same = h.cheapest_is_best;
+    el.append($(`<div class="grid ${same?"":"g2"}" style="margin-top:14px">
+      <div class="card"><div class="mut small">Recommended</div>
+        <div class="row"><span class="mid">${esc(h.best.destination_name)}</span>${dealPill(h.best)}</div>
+        <div class="big price">${eur(rb.effective_eur)}</div>
+        <div class="mut small">${rb.origin} · ${rb.is_direct?"direct":"1+ stop"} ·
+          ${dfmt(rb.out_date)}→${dfmt(rb.back_date)} ·
+          ${rb.school_days?("🏫 "+rb.school_days):"✓ 0 school days"}</div>
+        <div class="small" style="margin-top:4px">${climChip(h.best.climate)}</div></div>
+      ${same ? "" : `<div class="card"><div class="mut small">Cheapest</div>
+        <div class="row"><span class="mid">${esc(h.cheapest.destination_name)}</span>${dealPill(h.cheapest)}</div>
+        <div class="big price">${eur(cb.effective_eur)}</div>
+        <div class="mut small">${cb.origin} · ${cb.is_direct?"direct":"1+ stop"} ·
+          ${dfmt(cb.out_date)}→${dfmt(cb.back_date)} ·
+          ${cb.school_days?("🏫 "+cb.school_days):"✓ 0 school days"}</div>
+        <div class="small" style="margin-top:4px">${climChip(h.cheapest.climate)}</div></div>`}
+    </div>`));
+  }
 
   const f = $(`<div class="filters">
     <select id="f-sort">
@@ -284,6 +322,9 @@ async function viewHoliday(el, hid){
       <option value="weather">Best weather</option>
       <option value="school">Fewest school days</option>
     </select>
+    <select id="f-price"><option value="any">Any price</option>
+      <option value="750">≤ €750</option><option value="1000">≤ €1000</option>
+      <option value="1500">≤ €1500</option></select>
     <select id="f-origin"><option value="any">Any origin</option>
       ${["TLL","HEL","RIX"].map(o=>`<option value="${o}">${o} only</option>`).join("")}</select>
     <select id="f-stops"><option value="any">Any connections</option>
@@ -303,6 +344,7 @@ async function viewHoliday(el, hid){
       if(FILTERS.origin !== "any") opts = opts.filter(x => x.origin === FILTERS.origin);
       if(FILTERS.stops === "direct") opts = opts.filter(x => x.is_direct);
       if(FILTERS.school !== "any") opts = opts.filter(x => x.school_days <= +FILTERS.school);
+      if(FILTERS.price !== "any") opts = opts.filter(x => x.effective_eur <= +FILTERS.price);
       if(!opts.length) return null;
       const best = FILTERS.sort === "cost"
         ? opts.reduce((a,b)=> b.effective_eur < a.effective_eur ? b : a)
@@ -325,7 +367,8 @@ async function viewHoliday(el, hid){
         ${priced.length ? "Try relaxing them — " + priced.length + " destinations are priced."
         : "Scanning has just started; first results appear over the next few radar cycles."}</div>`));
     }
-    rows.forEach((r,i)=>{
+    const shown = expanded ? rows : rows.slice(0, PAGE);
+    shown.forEach((r,i)=>{
       const b = r._best;
       const alts = r._opts.filter(o => o !== b)
         .map(o => `${o.origin} ${eur(o.effective_eur)} ${o.is_direct?"direct":"1+ stop"}
@@ -336,7 +379,7 @@ async function viewHoliday(el, hid){
         <div class="head"><span class="rank">#${i+1}</span>
           <span class="name">${esc(r.destination_name)}</span>
           <span class="mut small">${esc(r.country)}</span>
-          <span style="margin-left:auto">${scorePill(r._best.score)}</span></div>
+          <span style="margin-left:auto">${dealPill(b)}</span></div>
         <div class="mut small" style="margin:4px 0 10px">${climChip(r.climate)}</div>
         <div class="row">
           <div style="min-width:150px"><span class="mid price">${eur(b.effective_eur)}</span>
@@ -349,11 +392,17 @@ async function viewHoliday(el, hid){
         ${alts ? `<div class="alt">Other origins: ${alts}</div>` : ""}
       </a>`));
     });
+    if(!expanded && rows.length > PAGE){
+      const more = $(`<button class="btn ghost" style="margin-top:6px">
+        Show ${rows.length - PAGE} more destinations</button>`);
+      more.onclick = () => { expanded = true; render(); };
+      list.append(more);
+    }
     const scanning = d.opportunities.filter(o=>o.state==="scanning").length;
     if(scanning) list.append($(`<p class="mut small" style="margin-top:14px">
       🔎 ${scanning} more destinations are still being scanned — results improve each night.</p>`));
   }
-  for(const k of ["sort","origin","stops","school"]){
+  for(const k of ["sort","origin","stops","school","price"]){
     const sel = f.querySelector("#f-"+k);
     sel.value = FILTERS[k];
     sel.onchange = () => { FILTERS[k] = sel.value; render(); };
@@ -387,12 +436,23 @@ async function viewOpportunity(el, hid, dst){
     <div class="mut small">${b.logistics_eur ? `${eur(b.flights_eur)} flights + ${eur(b.logistics_eur)} ${b.origin} logistics`
       : "no origin logistics"}${b.hotel_risk_eur ? ` · +${eur(b.hotel_risk_eur)} hotel if the flight is early/late` : ""}</div>
     <div class="facts small">${schoolChip(b)} · ${(b.airlines||[]).join(" + ")||"airline n/a"}</div>
+    <div class="row" style="margin-top:12px">${dealPill(b)} ${scorePill(b.score)}</div>
+    <div class="small mut" style="margin-top:8px">Why?<br>${
+      (b.reasons||[]).map(r=>(r.good?"✓ ":"△ ")+esc(r.text)).join("<br>")}</div>
     <div class="row" style="margin-top:12px">${verifChip(b.verification.level)}
       <span class="mut small">source ${b.source} · updated ${ago(b.age_hours)}</span></div>
-    <div class="row" style="margin-top:12px">
-      <button class="btn" onclick="alert('Live verification lands with E3.')">Check live price</button>
-      <button class="btn ghost" onclick="alert('Tracking arrives with E3 alerts.')">♡ Track</button>
-    </div></div>`));
+    ${b.verify_mode === "carrier-direct" ? `
+      <div class="small mut" style="margin-top:8px;border-left:2px solid var(--line);padding-left:10px">
+        This fare comes straight from ${(b.airlines||["the carrier"])[0]}. Google Flights
+        does not price Ryanair, so a live check can only show what other airlines cost.</div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" onclick="alert('Alternative-market check lands with E3.')">Check alternatives</button>
+        <button class="btn ghost" onclick="alert('Tracking arrives with E3 alerts.')">♡ Track</button>
+      </div>`
+    : `<div class="row" style="margin-top:12px">
+        <button class="btn" onclick="alert('Live verification lands with E3.')">Check live price</button>
+        <button class="btn ghost" onclick="alert('Tracking arrives with E3 alerts.')">♡ Track</button>
+      </div>`}</div>`));
 
   const m = b.market || {};
   g.append($(`<div class="card">
@@ -435,15 +495,18 @@ async function viewOpportunity(el, hid, dst){
   if(d.school_ladder.length > 1){
     el.append($(`<h2>Price vs school days</h2>`));
     const l = $(`<div class="card scroll"><table><thead><tr><th>School days</th><th>Dates</th>
-      <th>Origin</th><th class="n">Effective</th><th class="n">Difference</th></tr></thead>
+      <th>Origin</th><th class="n">Effective</th><th class="n">vs no school missed</th></tr></thead>
       <tbody></tbody></table></div>`);
     const lb = l.querySelector("tbody");
     for(const p of d.school_ladder){
-      const save = p.saving_vs_zero_eur;
+      const dv = p.diff_vs_zero_school_eur;
+      const cell = dv == null ? `<span class="mut">baseline</span>`
+        : dv < 0 ? `<span style="color:var(--good)">saves ${eur(-dv)}</span>`
+                 : `<span style="color:var(--fair)">costs ${eur(dv)} more</span>`;
       lb.append($(`<tr><td>${p.school_days?("🏫 "+p.school_days):"✓ none"}</td>
         <td>${dfmt(p.out_date)} → ${dfmt(p.back_date)} <span class="mut">(${p.nights}n)</span></td>
         <td>${p.origin}</td><td class="n price">${eur(p.effective_eur)}</td>
-        <td class="n" style="color:${save>0?"var(--good)":"var(--mut)"}">${save>0?"save "+eur(save):"—"}</td></tr>`));
+        <td class="n">${cell}</td></tr>`));
     }
     el.append(l);
     el.append($(`<p class="mut small">The radar doesn't decide — it makes the trade-off visible.</p>`));
@@ -460,6 +523,18 @@ async function viewOpportunity(el, hid, dst){
       ps.forEach(p => cell[p.out_date+"|"+p.back_date] = p);
       const prices = ps.map(p=>p.effective_eur);
       const lo = Math.min(...prices), hi = Math.max(...prices);
+      // markers: € cheapest here, ★ the recommended pair, ✓ cheapest 0-school
+      const cheapCell = ps.reduce((a,x)=> x.effective_eur < a.effective_eur ? x : a);
+      const zeroCells = ps.filter(x=>!x.school_days);
+      const zeroCell = zeroCells.length
+        ? zeroCells.reduce((a,x)=> x.effective_eur < a.effective_eur ? x : a) : null;
+      const mark = p => {
+        const m = [];
+        if(b && p.origin===b.origin && p.out_date===b.out_date && p.back_date===b.back_date) m.push("★");
+        if(p===cheapCell) m.push("€");
+        if(zeroCell && p===zeroCell) m.push("✓");
+        return m.length ? `<span class="star" style="font-size:11px"> ${m.join("")}</span>` : "";
+      };
       const mt = $(`<div class="card scroll" style="margin-bottom:12px">
         <h3>${og} <span class="mut small">— depart (rows) × return (columns), effective family cost</span></h3>
         <table class="matrix"><thead><tr><th></th>${backs.map(b=>`<th class="n">${dfmt(b)}</th>`).join("")}</tr></thead>
@@ -468,8 +543,12 @@ async function viewOpportunity(el, hid, dst){
           if(!p) return `<td class="mut">·</td>`;
           const rel = hi>lo ? (p.effective_eur-lo)/(hi-lo) : 0;
           const col = rel<.34?"var(--good)":rel<.67?"var(--fair)":"var(--mut)";
-          return `<td style="color:${col}" title="${p.nights} nights, ${p.school_days} school days">
-            ${eur(p.effective_eur)}${p.school_days?`<br><span class="mut" style="font-size:11px">🏫${p.school_days}</span>`:""}</td>`;
+          const tip = `${eur(p.effective_eur)} effective · ${eur(p.flights_eur)} flights · `
+            + `${p.nights} nights · ${p.is_direct?"nonstop":"with a connection"} · `
+            + `${p.school_days?p.school_days+" school days":"no school missed"}`
+            + `${(p.airlines||[]).length?" · "+p.airlines.join(" + "):""}`;
+          return `<td style="color:${col}" title="${esc(tip)}">
+            ${eur(p.effective_eur)}${mark(p)}${p.school_days?`<br><span class="mut" style="font-size:11px">🏫${p.school_days}</span>`:""}</td>`;
         }).join("")}</tr>`).join("")}</tbody></table></div>`);
       el.append(mt);
     }
@@ -508,7 +587,9 @@ async function viewSystem(el){
         (${lr.discovery_priced ?? 0} priced)</td></tr>
       <tr><td>Audit</td><td class="n">${lr.audit_used ?? "–"}/${lr.audit_budget ?? "–"}</td></tr>
       <tr><td>Verify rows</td><td class="n">${lr.verify_rows ?? "–"}</td></tr>
-      <tr><td>Floor due</td><td class="n">${lr.floor_due ?? "–"}</td></tr>
+      <tr><td title="Blind watches that must receive at least one sample within the
+        configured starvation window (14 nights), regardless of priority score.">
+        Exploration floor due</td><td class="n">${lr.floor_due ?? "–"} watches</td></tr>
       <tr><td>Errors</td><td class="n" style="color:${s.errors.length?"var(--bad)":"var(--good)"}">${s.errors.length}</td></tr>
       </tbody></table></div>
     <div class="card"><h3>Observations by source</h3>
@@ -569,8 +650,13 @@ function setStatus(d){
     <span>${healthy ? "All systems healthy" : d.error_count+" issue(s) last run"} ·
     scan ${d.updated_at ? new Date(d.updated_at).toLocaleString("en-GB",{hour:"2-digit",minute:"2-digit",day:"numeric",month:"short"}) : "–"}</span>`;
 }
+let statusLoaded = false;
 async function route(){
   const el = document.getElementById("view");
+  if(!statusLoaded){
+    statusLoaded = true;
+    j("/api/radar").then(setStatus).catch(()=>{});
+  }
   const parts = (location.hash.replace(/^#\/?/, "")).split("/").filter(Boolean);
   document.querySelectorAll("nav a").forEach(a =>
     a.classList.toggle("on", (a.dataset.r||"") === (parts[0]==="h" ? "" : (parts[0]||""))));

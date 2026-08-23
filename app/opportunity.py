@@ -119,6 +119,21 @@ def market_signal(conn, holiday_id: str, origin: str, destination: str,
     return out
 
 
+def deal_label(cfg: Config, iata: str, effective: float) -> tuple[str, str]:
+    """(key, human label). The UI must never call something 'best deal' when
+    it is merely the least bad option (review 2026-08-23)."""
+    tier, _ = _tier_of(cfg, iata)
+    if not tier:
+        return "unknown", "price unknown"
+    if effective <= tier.super_eur:
+        return "exceptional", "exceptional deal"
+    if effective <= tier.notify_eur:
+        return "good", "good deal"
+    if effective <= tier.notify_eur * 1.6:
+        return "fair", "fair price"
+    return "expensive", "above usual budget"
+
+
 def _climate_block(cfg: Config, iata: str, month: int, cache: dict) -> dict:
     normals = (cache.get(iata) or {}).get(str(month)) or {}
     status, score, rule = climate_mod.best_for_month(cfg, iata, month, cache)
@@ -163,6 +178,10 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
         "school_before": sd_b, "school_after": sd_a,
         "source": row["source"], "price_basis": row["price_basis"],
         "age_hours": age_h,
+        # Google cannot price Ryanair, so a Ryanair fare is authoritative from
+        # the carrier and a Google check only surfaces alternatives.
+        "verify_mode": ("carrier-direct" if row["source"] == "ryanair"
+                        else "google-verifiable"),
         "extra_time_h": og.extra_time_h,
         "hotel_risk_eur": og.hotel_eur or None,
         "verification": ({"level": verified["level"],
@@ -289,6 +308,9 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
                                   "climate_gate": cgate}
             opt["reasons"] = _reasons(cfg, opt, clim, m)
 
+        for opt in options:
+            key, label = deal_label(cfg, dst, opt["effective_eur"])
+            opt["deal_key"], opt["deal_label"] = key, label
         best = max(options, key=lambda o: o["score"])
         cheapest = min(options, key=lambda o: o["effective_eur"])
         zero_school = min((o for o in options if o["school_days"] == 0),
@@ -306,6 +328,7 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
             "zero_school_option": zero_school,
             "recommendation_score": best["score"],
             "market_score": best_market if best_market >= 0 else None,
+            "deal_key": best["deal_key"], "deal_label": best["deal_label"],
             "verification_level": best["verification"]["level"],
             "freshness_hours": best["age_hours"],
             "coverage_class": any_state["coverage_class"],
