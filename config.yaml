@@ -47,11 +47,14 @@ destinations:
 # tolerance band of a bound. Climate is a ranking signal — hard exclusion only
 # when strict: true.
 climate_rules:
-  # max_day_max_c matters for a family with young children: Bangkok in April
-  # (~35 °C) scored a perfect 10 without an upper bound, which is wrong for a
-  # 6-year-old. Above the cap a destination degrades to marginal, then excluded.
-  beach:     {min_day_max_c: 23, max_day_max_c: 33, min_sea_c: 21, max_rain_days: 8, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
-  warm_city: {min_day_max_c: 17, max_day_max_c: 31, max_rain_days: 9, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
+  # Warmth SATURATES rather than being capped: full marks at ideal_day_max_c
+  # (~24 °C is plenty for a family), nothing extra above it. Heat never
+  # excludes a destination — Bangkok at 35 °C is still a great trip, it just
+  # shouldn't outscore everywhere else on temperature alone. Only cold, rain
+  # or a missing sea can exclude. hot_penalty_from_c applies a mild nudge for
+  # genuinely extreme heat with young children.
+  beach:     {min_day_max_c: 23, ideal_day_max_c: 26, hot_penalty_from_c: 34, min_sea_c: 21, max_rain_days: 8, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
+  warm_city: {min_day_max_c: 17, ideal_day_max_c: 24, hot_penalty_from_c: 32, max_rain_days: 9, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
 
 # Family (2+2) round-trip totals, EUR, carry-on basis.
 tiers:

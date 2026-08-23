@@ -69,7 +69,8 @@ class ClimateRule:
     Marginal = within the tolerance band. strict=True turns marginal into
     excluded (opt-in hard filter)."""
     min_day_max_c: float | None = None
-    max_day_max_c: float | None = None   # too hot for young children
+    ideal_day_max_c: float | None = None    # full marks here; warmth saturates
+    hot_penalty_from_c: float | None = None  # mild nudge only; never excludes
     min_sea_c: float | None = None
     max_rain_days: float | None = None
     tolerance_c: float = 2.0

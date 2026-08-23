@@ -114,10 +114,9 @@ def classify(rule: ClimateRule, t_max: float | None, rain_days: float | None,
     the module docstring."""
     if t_max is None:
         return EXCLUDED, 0.0
-    # distance below the minimum OR above the family-comfort maximum
-    dt = max(0.0, (rule.min_day_max_c or 0) - t_max)
-    if rule.max_day_max_c is not None:
-        dt = max(dt, max(0.0, t_max - rule.max_day_max_c))
+    lo = rule.min_day_max_c or 0
+    # Only being too COLD counts as a shortfall — heat never excludes.
+    dt = max(0.0, lo - t_max)
     dr = max(0.0, (rain_days or 0) - rule.max_rain_days) if rule.max_rain_days is not None else 0.0
     if rule.min_sea_c is not None:
         if sea_c is None:
@@ -134,9 +133,16 @@ def classify(rule: ClimateRule, t_max: float | None, rain_days: float | None,
     else:
         status = EXCLUDED
 
-    surplus = min(1.5, max(0.0, t_max - (rule.min_day_max_c or 0)) * 0.15)
-    score = max(0.0, min(10.0, 10.0 - dt * 1.2 - dr * 0.5 - ds * 1.0 + surplus))
-    return status, round(score, 1)
+    # Warmth saturates: 7 at the minimum, 10 from the ideal upwards. Extra
+    # degrees beyond the ideal add nothing (a plateau, not a bonus), and only
+    # genuinely extreme heat takes a small amount back off.
+    ideal = rule.ideal_day_max_c or lo
+    span = max(1.0, ideal - lo)
+    comfort = max(0.0, min(1.0, (t_max - lo) / span))
+    heat = (min(2.5, max(0.0, t_max - rule.hot_penalty_from_c) * 0.2)
+            if rule.hot_penalty_from_c is not None else 0.0)
+    score = (7.0 + 3.0 * comfort) - dt * 1.2 - dr * 0.5 - ds * 1.0 - heat
+    return status, round(max(0.0, min(10.0, score)), 1)
 
 
 def best_for_month(cfg: Config, iata: str, month: int,

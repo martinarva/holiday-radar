@@ -220,6 +220,9 @@ async function viewRadar(el){
            <div class="mut small">Cheapest overall</div>
            <div class="row"><span class="mid price">${eur(co.effective_eur)}</span>
              <span class="small">${esc(c.destination_name)}</span></div>
+           <div class="small">${climChip(c.climate)}</div>
+           <div class="small"><b>${dfmt(co.out_date)} → ${dfmt(co.back_date)}</b>
+             <span class="mut">· ${co.nights} nights</span></div>
            <div class="mut small">${co.origin} · ${co.is_direct?"direct":"1+ stop"} ·
              ${co.school_days?("🏫 "+co.school_days):"✓ 0 school days"}</div></div>`
       : (co ? `<div class="mut small" style="margin-top:10px">Also the cheapest option.</div>` : "");
@@ -228,8 +231,12 @@ async function viewRadar(el){
       ${bo ? `<div class="mut small" style="margin-top:12px">Best match</div>
         <div class="row"><span class="mid">${esc(b.destination_name)}</span>${scorePill(b.recommendation_score)}</div>
         <div class="big price">${eur(bo.effective_eur)}</div>
+        <div class="small" style="margin:2px 0 2px">${climChip(b.climate)}</div>
+        <div class="small"><b>${dfmt(bo.out_date)} → ${dfmt(bo.back_date)}</b>
+          <span class="mut">· ${bo.nights} nights</span></div>
         <div class="mut small">${bo.origin} · ${bo.is_direct ? "direct" : "1+ stop"} ·
-          ${bo.nights} nights · ${bo.school_days ? "🏫 "+bo.school_days : "✓ 0 school days"}</div>
+          ${(bo.airlines||[]).join(" + ") || "airline n/a"} ·
+          ${bo.school_days ? "🏫 "+bo.school_days : "✓ 0 school days"}</div>
         ${cheapBlock}`
         : `<div class="empty" style="margin:12px 0">No prices yet — scanning has just started.</div>`}
       <div class="mut small" style="margin-top:12px">${h.priced} priced ·

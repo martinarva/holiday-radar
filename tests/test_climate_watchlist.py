@@ -39,12 +39,20 @@ def test_watchlist_product_and_mid_month():
     assert holiday_mid_month(cfg.holiday("autumn-2026")) == 10
 
 
-def test_upper_temperature_bound_protects_family_comfort():
-    """No upper bound gave Bangkok in April (~35 °C) a perfect score."""
-    hot = ClimateRule(min_day_max_c=17, max_day_max_c=31, max_rain_days=9,
-                      tolerance_c=2, tolerance_rain_days=2)
-    assert classify(hot, 24.0, 5.0, None)[0] == ELIGIBLE
-    assert classify(hot, 32.5, 5.0, None)[0] == MARGINAL     # 1.5 over, within tol
-    assert classify(hot, 35.0, 5.0, None)[0] == EXCLUDED     # 4 over
-    # and the score degrades rather than staying pinned at 10
-    assert classify(hot, 35.0, 5.0, None)[1] < classify(hot, 24.0, 5.0, None)[1]
+def test_warmth_saturates_and_heat_never_excludes():
+    """Bangkok in April (~35 C) is a great trip - it just must not outscore
+    everywhere else on temperature alone. Warmth plateaus at the ideal; only
+    cold/rain/missing-sea can exclude."""
+    rule = ClimateRule(min_day_max_c=17, ideal_day_max_c=24,
+                       hot_penalty_from_c=32, max_rain_days=9,
+                       tolerance_c=2, tolerance_rain_days=2)
+    assert classify(rule, 35.0, 5.0, None)[0] == ELIGIBLE      # never excluded
+    ideal = classify(rule, 24.0, 5.0, None)[1]
+    warmer = classify(rule, 29.0, 5.0, None)[1]
+    hot = classify(rule, 35.0, 5.0, None)[1]
+    assert ideal == 10.0                       # full marks at the ideal
+    assert warmer == ideal                     # plateau: extra heat adds nothing
+    assert hot < ideal                         # extreme heat costs a little
+    assert hot >= 9.0                          # ...but stays a strong option
+    assert classify(rule, 18.0, 5.0, None)[1] < ideal   # cooler discriminates
+    assert classify(rule, 12.0, 5.0, None)[0] == EXCLUDED  # cold still excludes
