@@ -211,6 +211,18 @@ def cmd_coverage_report(cfg: Config, args) -> None:
         print(f"report written: {out}")
 
 
+def cmd_nightly(cfg: Config, args) -> None:
+    """E2-B: one nightly opportunity-scheduler cycle."""
+    from app.scheduler import run_nightly
+    summary = run_nightly(cfg, cfg.base_dir / args.db,
+                          google_budget=args.google_budget,
+                          audit_budget=args.audit_budget,
+                          verify_budget=args.verify_budget)
+    print("\n=== NIGHTLY SUMMARY ===")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+
+
 def cmd_serve(cfg: Config, args) -> None:
     import uvicorn
     from app.api import create_app
@@ -257,6 +269,13 @@ def main(argv: list[str] | None = None) -> None:
     pdr.add_argument("--no-db", action="store_true",
                      help="skip persistence (pre-E2 behaviour)")
 
+    pn = sub.add_parser("nightly",
+                        help="E2-B: one nightly cycle (carriers + sampler + verify)")
+    pn.add_argument("--db", default="data/radar.db")
+    pn.add_argument("--google-budget", type=int, default=30)
+    pn.add_argument("--audit-budget", type=int, default=2)
+    pn.add_argument("--verify-budget", type=int, default=5)
+
     psv = sub.add_parser("serve", help="dev UI + JSON API (reads DB only)")
     psv.add_argument("--port", type=int, default=8765)
     psv.add_argument("--host", default="127.0.0.1")
@@ -300,6 +319,7 @@ def main(argv: list[str] | None = None) -> None:
          "climate-fetch": cmd_climate_fetch,
          "dry-run": cmd_dry_run,
          "coverage-report": cmd_coverage_report,
+         "nightly": cmd_nightly,
          "serve": cmd_serve,
          "probe-google": cmd_probe_google,
          "probe-travelpayouts": cmd_probe_tp,

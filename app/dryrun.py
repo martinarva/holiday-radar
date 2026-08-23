@@ -78,10 +78,10 @@ def _google_weight(h: Holiday, today: date) -> float:
     return 0.05
 
 
-def run(cfg: Config, log=print, sleep_s: float = 0.12,
-        db_path=None) -> tuple[dict, str]:
-    """Execute the dry run; returns (summary dict, markdown report).
-    With db_path set, observations + watch state are persisted (E2-A)."""
+def collect(cfg: Config, log=print, sleep_s: float = 0.12) -> dict:
+    """The full stage-A collection pass (climate → dormancy → carrier
+    fetches → candidate assembly). Shared by the dry run and the nightly
+    scheduler (E2-B) so there is exactly ONE collection semantics."""
     from datetime import datetime, timezone
     started_at = datetime.now(timezone.utc).isoformat()
     today = date.today()
@@ -178,13 +178,24 @@ def run(cfg: Config, log=print, sleep_s: float = 0.12,
                 og, ig, h, r.origin, r.destination)
         r.ry_pair = ry_fares.get((r.origin, r.holiday_id), {}).get(r.destination)
 
+    return {"started_at": started_at, "today": today, "errors": errors,
+            "hols": hols, "rows": rows, "relevant": relevant,
+            "n_calls": n_calls}
+
+
+def run(cfg: Config, log=print, sleep_s: float = 0.12,
+        db_path=None) -> tuple[dict, str]:
+    """Execute the dry run; returns (summary dict, markdown report).
+    With db_path set, observations + watch state are persisted (E2-A)."""
+    d = collect(cfg, log=log, sleep_s=sleep_s)
+    hols, relevant, today = d["hols"], d["relevant"], d["today"]
     summary, blind, best = compute_metrics(cfg, hols, relevant, today,
-                                           theoretical=len(rows))
-    summary["airbaltic_calls_per_night"] = n_calls
+                                           theoretical=len(d["rows"]))
+    summary["airbaltic_calls_per_night"] = d["n_calls"]
 
     if db_path:
-        _persist(cfg, db_path, relevant, summary, started_at, errors)
-        log(f"persisted to {db_path} ({len(errors)} provider errors logged)")
+        _persist(cfg, db_path, relevant, summary, d["started_at"], d["errors"])
+        log(f"persisted to {db_path} ({len(d['errors'])} provider errors logged)")
 
     md = _report_md(cfg, summary, hols, relevant, blind, best, today)
     return summary, md

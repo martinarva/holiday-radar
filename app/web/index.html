@@ -44,6 +44,7 @@
 <h1>holiday-radar <span>· dev</span></h1>
 <div class="sub" id="health">loading…</div>
 <div id="errors"></div>
+<div id="verif"></div>
 <div id="holidays">loading…</div>
 
 <script>
@@ -79,14 +80,45 @@ async function load(){
   const h = await j("/health");
   const runs = await j("/api/runs?limit=5");
   const lastErrs = (h.last_run && h.last_run.errors) || [];
+  const sm = (h.last_run && h.last_run.summary) || {};
+  const budgets = sm.discovery_used != null
+    ? ` · google: ${sm.discovery_used}/${sm.discovery_budget} discovery` +
+      ` (${sm.discovery_priced} priced, ${sm.floor_due} floor-due)` +
+      ` · ${sm.audit_used}/${sm.audit_budget} audit · ${sm.verify_rows} verified`
+    : "";
   document.getElementById("health").textContent =
     `data night: ${h.latest_night ?? "–"} · observations: ${h.observations_total}` +
     ` · last run: ${h.last_run ? h.last_run.kind+" @ "+fmtT(h.last_run.finished_at) : "never"}` +
-    ` · errors in last run: ${lastErrs.length}` +
-    ` · runs kept: ${runs.length}`;
+    budgets +
+    ` · errors in last run: ${lastErrs.length}`;
   if(lastErrs.length)
     document.getElementById("errors").innerHTML =
       `<div class="err">last run errors:\n${lastErrs.join("\n")}</div>`;
+
+  // E2-B.5: exact family totals for candidates that beat the verify rule
+  const vs = await j("/api/verifications?limit=12");
+  if(vs.length){
+    const rows = vs.map(v => {
+      const d = v.delta_eur;
+      const dtxt = d == null ? "" :
+        `<span class="${d <= 0 ? 'direct' : 'stop'}">${d > 0 ? "+" : ""}${Math.round(d)} € vs indicative</span>`;
+      return `<tr>
+        <td>${v.holiday_id}</td>
+        <td>${v.origin}→${v.destination}</td>
+        <td>${v.out_date} → ${v.back_date}</td>
+        <td class="num fam">${v.price_total_eur == null ? "no result" : money(v.price_total_eur)}</td>
+        <td>${dtxt}</td>
+        <td class="mut">${v.airlines.join("+")}</td>
+        <td><span class="tag">${v.level}</span></td>
+      </tr>`;
+    }).join("");
+    document.getElementById("verif").innerHTML = `
+      <div class="hol"><h2><b>verified candidates</b> <span class="mut">— exact family totals (stage B)</span></h2>
+      <div class="wrap"><table>
+        <tr><th>holiday</th><th>watch</th><th>pair</th><th>family total</th>
+            <th></th><th>airlines</th><th>level</th></tr>
+        ${rows}</table></div></div>`;
+  }
 
   const data = await j("/api/holidays");
   window.__origins = data.origins;

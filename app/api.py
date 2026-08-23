@@ -86,7 +86,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         if run:
             errors = json.loads(run["errors_json"]) if run["errors_json"] else []
             last = {"kind": run["kind"], "started_at": run["started_at"],
-                    "finished_at": run["finished_at"], "errors": errors}
+                    "finished_at": run["finished_at"], "errors": errors,
+                    "summary": json.loads(run["summary_json"])}
         return {"ok": True, "latest_night": night,
                 "observations_total": n_obs, "last_run": last}
 
@@ -102,6 +103,35 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             "errors": json.loads(r["errors_json"]) if r["errors_json"] else [],
             "summary": json.loads(r["summary_json"]),
         } for r in rows]
+
+    @app.get("/api/verifications")
+    def verifications(limit: int = 50):
+        """E2-B.5 results: exact family totals for candidates that passed the
+        `family <= buy_threshold x 1.25` rule."""
+        conn = _conn(cfg)
+        rows = conn.execute(
+            "SELECT * FROM verifications ORDER BY id DESC LIMIT ?",
+            (limit,)).fetchall()
+        conn.close()
+        out = []
+        for r in rows:
+            out.append({
+                "holiday_id": r["holiday_id"], "origin": r["origin"],
+                "destination": r["destination"],
+                "out_date": r["out_date"], "back_date": r["back_date"],
+                "verified_night": r["verified_night"],
+                "price_total_eur": r["price_total_eur"],
+                "indicative_family_eur": r["indicative_family_eur"],
+                "delta_eur": (round(r["price_total_eur"]
+                                    - r["indicative_family_eur"], 2)
+                              if r["price_total_eur"] is not None
+                              and r["indicative_family_eur"] is not None
+                              else None),
+                "airlines": json.loads(r["airlines"] or "[]"),
+                "legs": json.loads(r["legs"] or "[]"),
+                "level": r["level"], "reason": r["reason"],
+            })
+        return out
 
     @app.get("/api/holidays")
     def holidays():

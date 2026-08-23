@@ -439,14 +439,30 @@ The human decides ("€300 cheaper, but 9 h of extra logistics with two kids?").
     NIGHT — reruns update, never duplicate); today's dry-run observations
     written to the DB and the SAME coverage report recomputable from the DB
     without network.
-  - **E2-B — opportunity scheduler:** carrier jobs + dormant activation +
-    Google priority queue with `priority = urgency × blindness × staleness ×
-    climate × pair_quality × exploration`; nightly budget stays **30**
-    (decision: computed demand ≈48 is a cadence wish, not a system minimum —
-    information value decides, no "full sweep every N days" promise); an
-    **exploration floor** guarantees every active relevant blind watch ≥1
-    observation per 14 days (protects against priority local optima).
-    A provider failure must never abort the whole run.
+  - **E2-B — opportunity scheduler** (design fixed by review 2026-08-23):
+    carrier jobs + dormant activation (dormant = absolute zero-cost state) +
+    Google priority queue. Priority is a product of **bounded factors, each
+    0.5–2.0 so no single factor can zero a watch out**; `urgency` and
+    `staleness` carry the strongest spread; climate influences but never
+    dominates. The **exploration floor is a separate scheduler invariant,
+    independent of the score**: active+relevant+blind ⇒ ≥1 Google
+    observation per 14 days — starvation is mathematically impossible.
+    Budgets: **30 discovery/night, 1 query per selected watch** (breadth
+    beats depth; 30×1 > 10×3) with per-watch date-pair-class rotation kept
+    in the DB (`zero-school 7–9n → zero-school other → weekday/weekend rep →
+    flex edge → repeat oldest`), **+2 audit/night from a separate budget**:
+    carrier-covered watches re-checked via Google (~14/week, full 89-watch
+    cycle ≈ 6 weeks) to build `carrier_vs_google_delta` /
+    provider-bias metrics. Google's roles are named apart in the data:
+    `observation_role = discovery | audit | verification` (provider stays
+    google_flights). A provider failure must never abort the whole run.
+  - **E2-B.5 — candidate verification hook** (pulled forward from E3):
+    `stage-A observation → candidate rule → exact Google verify → store`.
+    Conservative rule to start: `estimated_family ≤ buy_threshold × 1.25`
+    (short-haul: indicative ≤ €500 goes to verify) or a strong market
+    candidate once baselines exist. No HA pushes, no notification state
+    machine — just the answer to the system's most direct end-to-end
+    question ("can the family really fly RIX→BCN for ~€468?").
   - **E2-C — history/market metrics:** best-current, previous, trend,
     staleness, initial 60-day baseline and `market_score`
     (`days_to_departure` already collected).
@@ -455,10 +471,19 @@ The human decides ("€300 cheaper, but 9 h of extra logistics with two kids?").
     a placeholder until E3.
   - **E2-E — operationalization:** Docker scheduler, health/status,
     per-provider last-success, debug snapshots, restart resilience.
-  - **E2 exit gate — a 72 h unattended run:** ≥3 nightly cycles; a restart
-    mid-run; one provider artificially failed; one dormant-transition test;
-    budget never exceeds 30; zero duplicate observations; the dashboard
-    rebuilds correct state from the DB alone.
+  - **E2 exit gate — a 72 h unattended soak, run after E2-B + E2-C-minimal**
+    (the gate proves the data-collection machine, not the dashboard; UI
+    polish continues in parallel). E2-C-minimal = after three nights the DB
+    answers: current price / previous / delta / observation age /
+    observations count / days_to_departure (the 60-day baseline obviously
+    cannot exist in three days). Machine-readable acceptance criteria:
+    ≥3 scheduled nightly runs · Google discovery ≤30/run · audit ≤2/run ·
+    provider failure does not abort a run · retry creates zero duplicate
+    historical observations · dormant watches consume zero provider/sampler
+    budget · starvation bookkeeping survives restarts · DB-only coverage
+    invariants hold · UI/API state rebuilds from the DB alone · ≥1 simulated
+    airBaltic/Ryanair failure · ≥1 restart between scheduled runs · the
+    dormant transition is tested with clock injection (not by waiting).
   - Coverage invariants live in tests (they held live on 2026-08-23:
     airBaltic 85 + Ryanair 12 − overlap 8 = 89 covered = 43 direct +
     46 one-stop; 79/89 with a zero-school-day priced pair) — pipeline
@@ -537,7 +562,18 @@ Confirmed 2026-08-23 (owner):
     verdict against the current gate, not a quality judgment; revisit
     triggers documented in the scorecard). Full scorecard:
     docs/carrier-recon.md.
-13. **Review round 2 accepted (2026-08-23):** README brought up to date with
+13. **E2-B green light (review round 3, 2026-08-23):** bounded multiplicative
+    priority (each factor 0.5–2.0; urgency+staleness strongest; climate
+    non-dominant) with the 14-day exploration floor as an independent
+    invariant; 30 discovery queries/night at **1 pair per watch** with
+    DB-kept pair-class rotation; **separate +2/night audit budget** over
+    carrier-covered watches (carrier_vs_google_delta metric); dormant =
+    absolute zero-cost; `observation_role = discovery|audit|verification`
+    in the data model; **E2-B.5 verify hook** pulled forward (candidate rule
+    `family ≤ buy_threshold × 1.25`); 72 h gate moved to after
+    E2-B + E2-C-minimal with machine-readable criteria and clock-injected
+    dormant test. Carrier recon stays closed.
+14. **Review round 2 accepted (2026-08-23):** README brought up to date with
     the recon (it had gone stale — the doc a stranger sees first);
     "REJECTED" renamed NOT ADMITTED; Google sampler made budget-based with a
     priority score and smart pair ordering (see §4C); `buy_threshold` and

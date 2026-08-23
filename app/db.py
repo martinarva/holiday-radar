@@ -70,6 +70,41 @@ MIGRATIONS: list[tuple[str, str]] = [
         )"""),
     ("0006_runs_errors", """
         ALTER TABLE runs ADD COLUMN errors_json TEXT"""),
+    # E2-B: Google's roles named apart (review 2026-08-23); carrier rows and
+    # sampler rows are 'discovery', carrier-vs-google checks are 'audit',
+    # exact family-total confirmations live in `verifications`.
+    ("0007_observation_role", """
+        ALTER TABLE observations ADD COLUMN observation_role TEXT
+        NOT NULL DEFAULT 'discovery'"""),
+    ("0008_sampler_state", """
+        CREATE TABLE sampler_state (
+            holiday_id TEXT NOT NULL,
+            origin TEXT NOT NULL,
+            destination TEXT NOT NULL,
+            rotation_idx INTEGER NOT NULL DEFAULT 0,
+            last_google_night TEXT,
+            PRIMARY KEY (holiday_id, origin, destination)
+        )"""),
+    ("0009_verifications", """
+        CREATE TABLE verifications (
+            id INTEGER PRIMARY KEY,
+            holiday_id TEXT NOT NULL,
+            origin TEXT NOT NULL,
+            destination TEXT NOT NULL,
+            out_date TEXT NOT NULL,
+            back_date TEXT NOT NULL,
+            verified_night TEXT NOT NULL,
+            verified_at TEXT NOT NULL,
+            price_total_eur REAL,
+            airlines TEXT,
+            legs TEXT,
+            level TEXT NOT NULL,
+            reason TEXT,
+            indicative_family_eur REAL
+        )"""),
+    ("0010_verifications_lookup", """
+        CREATE INDEX ix_verif_watch ON verifications
+        (holiday_id, origin, destination, out_date, back_date)"""),
 ]
 
 
@@ -97,7 +132,8 @@ def init_db(path: str | Path) -> sqlite3.Connection:
 
 
 def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
-                        obs: list[Observation], seats: int) -> int:
+                        obs: list[Observation], seats: int,
+                        role: str = "discovery") -> int:
     """One row per watch×source×pair×night; reruns update in place."""
     n = 0
     for o in obs:
@@ -107,8 +143,8 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               (holiday_id, origin, destination, source, out_date, back_date,
                observed_night, observed_at, price_adult_eur, price_basis,
                source_price, estimated_family_eur, is_direct, confidence,
-               freshness_hours, days_to_departure, raw_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               freshness_hours, days_to_departure, raw_json, observation_role)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(holiday_id, origin, destination, source,
                         out_date, back_date, observed_night)
             DO UPDATE SET
@@ -121,7 +157,8 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               confidence=excluded.confidence,
               freshness_hours=excluded.freshness_hours,
               days_to_departure=excluded.days_to_departure,
-              raw_json=excluded.raw_json
+              raw_json=excluded.raw_json,
+              observation_role=excluded.observation_role
         """, (holiday_id, o.origin, o.destination, o.source,
               o.out_date.isoformat(), o.back_date.isoformat(),
               night, o.observed_at.isoformat(),
@@ -129,10 +166,60 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               o.family_estimate_eur(seats),
               None if o.is_direct is None else int(o.is_direct),
               o.confidence, o.freshness_hours, o.days_to_departure,
-              json.dumps(o.raw) if o.raw else None))
+              json.dumps(o.raw) if o.raw else None, role))
         n += 1
     conn.commit()
     return n
+
+
+def sampler_state_all(conn: sqlite3.Connection) -> dict[tuple, dict]:
+    return {(r["holiday_id"], r["origin"], r["destination"]): dict(r)
+            for r in conn.execute("SELECT * FROM sampler_state")}
+
+
+def sampler_state_upsert(conn: sqlite3.Connection, holiday_id: str,
+                         origin: str, destination: str,
+                         rotation_idx: int, last_google_night: str) -> None:
+    conn.execute("""
+        INSERT INTO sampler_state VALUES (?,?,?,?,?)
+        ON CONFLICT(holiday_id, origin, destination) DO UPDATE SET
+          rotation_idx=excluded.rotation_idx,
+          last_google_night=excluded.last_google_night
+    """, (holiday_id, origin, destination, rotation_idx, last_google_night))
+    conn.commit()
+
+
+def insert_verification(conn: sqlite3.Connection, *, holiday_id: str,
+                        origin: str, destination: str, out_date: str,
+                        back_date: str, price_total_eur: float | None,
+                        airlines: str, legs: str, level: str, reason: str,
+                        indicative_family_eur: float | None) -> None:
+    now = datetime.now(UTC)
+    conn.execute("""
+        INSERT INTO verifications
+          (holiday_id, origin, destination, out_date, back_date,
+           verified_night, verified_at, price_total_eur, airlines, legs,
+           level, reason, indicative_family_eur)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (holiday_id, origin, destination, out_date, back_date,
+          now.date().isoformat(), now.isoformat(), price_total_eur,
+          airlines, legs, level, reason, indicative_family_eur))
+    conn.commit()
+
+
+def recent_verification_exists(conn: sqlite3.Connection, holiday_id: str,
+                               origin: str, destination: str, out_date: str,
+                               back_date: str, within_nights: int = 3) -> bool:
+    r = conn.execute("""
+        SELECT MAX(verified_night) n FROM verifications
+        WHERE holiday_id=? AND origin=? AND destination=?
+          AND out_date=? AND back_date=?
+    """, (holiday_id, origin, destination, out_date, back_date)).fetchone()
+    if not r or not r["n"]:
+        return False
+    from datetime import date, timedelta
+    return date.fromisoformat(r["n"]) >= (
+        datetime.now(UTC).date() - timedelta(days=within_nights))
 
 
 def write_watch_state(conn: sqlite3.Connection, rows: list[dict]) -> None:
