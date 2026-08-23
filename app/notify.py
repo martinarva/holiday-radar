@@ -122,6 +122,10 @@ def describe(cfg: Config, holiday, item: dict, opt: dict) -> dict:
         "times": _times(opt),
         "school_days": school,
         "score": opt.get("score"),
+        # None when this is tonight's reading. Present in the payload so a
+        # test — or Home Assistant — can actually see it; its absence made an
+        # assertion about stale alerts silently vacuous.
+        "from_night": opt.get("from_night"),
         "deal": key, "deal_label": label,
         "climate_c": clim.get("t_max_c"),
         "detail": " · ".join(parts),
@@ -230,7 +234,8 @@ def candidates(cfg: Config, conn, holiday, items: list[dict], night: str,
         # tonight's best; when the overall winner is stale it is a different
         # option, and using it means a genuinely fresh find still gets
         # announced instead of being hidden behind the stale one.
-        opt = item.get("best_fresh_option") or item.get("best_option")
+        # the CHEAPEST fresh candidate: both rules below are about price
+        opt = item.get("cheapest_fresh_option")
         if not opt or opt.get("effective_eur") is None or opt.get("from_night"):
             continue
         d = describe(cfg, holiday, item, opt)
@@ -261,10 +266,16 @@ def candidates(cfg: Config, conn, holiday, items: list[dict], night: str,
     # 3) the holiday's top pick changed — but never as a second buzz about a
     # destination this run already announced ("AGP EUR 350 is a good deal"
     # followed by "new best match: AGP EUR 350" is one thought, not two).
-    best = items[0]
-    bopt = best.get("best_option") or {}
+    # Rank by what is FRESH. items[0] is ordered by best_option, which can be
+    # a carried-over row — a real new_best alert went out for an AGP price
+    # observed the night before.
+    ranked = [i for i in items if (i.get("best_fresh_option") or {})
+              .get("effective_eur") is not None]
+    ranked.sort(key=lambda i: -(i["best_fresh_option"]["score"] or 0))
+    best = ranked[0] if ranked else None
+    bopt = (best or {}).get("best_fresh_option") or {}
     already = {a["destination"] for a in out}
-    if bopt.get("effective_eur") is not None:
+    if best is not None and not bopt.get("from_night"):
         prev = conn.execute(
             """SELECT destination, effective_eur FROM alerts
                WHERE kind=? AND holiday_id=? ORDER BY id DESC LIMIT 1""",

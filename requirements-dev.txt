@@ -2,5 +2,5 @@
 -r requirements.txt
 pip-tools==7.6.1     # regenerates requirements.lock
 pytest==9.1.1
-httpx2==0.29.0          # FastAPI TestClient (starlette deprecates httpx)
+httpx2==2.12.0          # FastAPI TestClient (starlette deprecates httpx)
 ruff==0.14.6

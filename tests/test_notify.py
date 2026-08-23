@@ -482,7 +482,8 @@ def test_the_payload_components_sum_to_the_price_it_advertises(cfg, tmp_path):
     notify.send(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"), "2026-08-23",
                 url="http://ha/hook", poster=spy, log=lambda *_: None)
     p = spy.calls[0][1]
-    assert p["origin_hotel_eur"] == cfg.origin("HEL").hotel_eur
+    # 10:00 out (before HEL's 12:00) AND 23:55 back: two separate nights
+    assert p["origin_hotel_eur"] == cfg.origin("HEL").hotel_eur * 2
     assert "hotel night" in p["detail"]
     components = (p["flights_eur"] + (p["logistics_eur"] or 0)
                   + (p["layover_hotel_eur"] or 0) + (p["origin_hotel_eur"] or 0))
@@ -570,3 +571,58 @@ def test_a_quiet_day_without_a_webhook_is_not_a_failure(cfg, tmp_path,
                  "2026-08-23", log=lambda *_: None)
     with pytest.raises(notify.NotifyError):
         notify.deliver(cfg, conn, log=lambda *_: None)
+
+
+def test_describe_carries_freshness_so_assertions_are_not_vacuous():
+    """The payload must expose from_night.
+
+    A test asserting "no alert carries from_night" passed while stale alerts
+    went out, because describe() never put the field in the payload. An
+    assertion about a key nobody writes proves nothing.
+    """
+    from app.opportunity import deal_label  # noqa: F401  (import sanity)
+    cfg = load_config(ROOT / "config.yaml")
+    h = cfg.holiday("autumn-2026")
+    item = {"destination": "AGP", "destination_name": "Málaga", "climate": {}}
+    opt = {"origin": "TLL", "effective_eur": 400.0, "flights_eur": 400.0,
+           "out_date": "2026-10-26", "back_date": "2026-11-01", "nights": 6,
+           "airlines": ["Ryanair"], "is_direct": True, "school_days": 0,
+           "from_night": "2026-08-22"}
+    d = notify.describe(cfg, h, item, opt)
+    assert d["from_night"] == "2026-08-22"
+    assert notify.describe(cfg, h, item, {**opt, "from_night": None})[
+        "from_night"] is None
+
+
+def test_a_cheap_connection_still_alerts_when_a_dearer_nonstop_outscores_it(
+        cfg, tmp_path):
+    """The buy rule is about price, so it must see the cheapest fresh option.
+
+    Handing every rule the highest-SCORING fresh candidate collapsed the full
+    set back to one wrong answer: a EUR 600 connection under the buy
+    threshold went unannounced because a EUR 700 nonstop outscored it.
+    """
+    conn = dbm.init_db(tmp_path / "n.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+    for fam, direct, src in ((700.0, True, "airbaltic"),
+                             (600.0, False, "google_flights")):
+        dbm.upsert_observations(conn, h.id, [Observation(
+            origin="TLL", destination="AGP", out_date=out, back_date=back,
+            price_adult_eur=round(fam / 4, 2), source=src, observed_at=NOW,
+            price_basis="family_quote", estimated_family_eur=fam,
+            is_direct=direct, raw={"airlines": [src]})], seats=4,
+            night="2026-08-23")
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "TLL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "covered_direct"}])
+
+    items = _items(cfg, conn, h, "2026-08-23")
+    assert items[0]["best_fresh_option"]["effective_eur"] == 700.0
+    assert items[0]["cheapest_fresh_option"]["effective_eur"] == 600.0
+
+    spy = Spy()
+    notify.send(cfg, conn, h, items, "2026-08-23", url="http://ha/hook",
+                poster=spy, log=lambda *_: None)
+    assert [c["effective_eur"] for _, c in spy.calls] == [600.0]

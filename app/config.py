@@ -58,9 +58,19 @@ class Origin:
         is never charged for a room it might not need; the UI still shows the
         amount as a risk.
         """
-        return (_before(out_departure, self.hotel_if_departure_before)
-                or _in_night_window(in_arrival, self.hotel_if_arrival_after,
-                                    self.hotel_night_ends))
+        return bool(self.hotel_nights(out_departure, in_arrival))
+
+    def hotel_nights(self, out_departure: str | None,
+                     in_arrival: str | None) -> int:
+        """How many hotel nights these clock times force: 0, 1 or 2.
+
+        An 08:00 Helsinki departure and a 23:30 return are two different
+        nights — one before the flight out, one after landing back. The
+        boolean charged for a single room and the second night vanished.
+        """
+        return (int(_before(out_departure, self.hotel_if_departure_before))
+                + int(_in_night_window(in_arrival, self.hotel_if_arrival_after,
+                                       self.hotel_night_ends)))
     extra_time_h: float = 0.0          # displayed only — never auto-priced
     note: str = ""
 

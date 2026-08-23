@@ -28,19 +28,28 @@ def _conn(cfg: Config):
     return dbm.init_db(cfg.base_dir / "data" / "radar.db")
 
 
-def _best_by_watch(conn, holiday_id: str, night: str | None) -> dict:
+def _best_by_watch(cfg: Config, conn, holiday_id: str,
+                   night: str | None) -> dict:
     """Cheapest observation per (origin, destination), same rules as the UI.
 
     This fed /api/holidays and /watches off its own one-night snapshot, so a
     carried-over price the radar and detail views both showed was missing
     here — the API disagreed with itself depending on which route you asked.
     """
+    from datetime import date as _date
+
     from app import opportunity as opp
 
     best: dict[tuple[str, str], dict] = {}
-    for o in opp.latest_priced_rows(conn, holiday_id, night):
+    for o in opp.latest_priced_rows(conn, holiday_id, night, cfg=cfg):
         k = (o["origin"], o["destination"])
-        if k not in best or o["price_adult_eur"] < best[k]["price_adult_eur"]:
+        # Cheapest TRIP, not cheapest fare. Comparing price_adult_eur put a
+        # EUR 400 fare with a EUR 110 layover hotel ahead of a EUR 450
+        # nonstop, so this endpoint disagreed with the radar by EUR 60.
+        nights = (_date.fromisoformat(o["back_date"])
+                  - _date.fromisoformat(o["out_date"])).days
+        o = {**o, "_effective": opp.row_costs(cfg, o, nights)["effective_eur"]}
+        if k not in best or o["_effective"] < best[k]["_effective"]:
             best[k] = o
     return best
 
@@ -62,6 +71,8 @@ def _best_payload(cfg: Config, h, row: dict | None) -> dict | None:
         "origin_hotel_eur": costs["origin_hotel_eur"],
         "effective_eur": costs["effective_eur"],
         "adult_eur": row["price_adult_eur"],
+        # carried over from an earlier night, so callers can label it
+        "from_night": row.get("_from_night"),
         "out_date": row["out_date"], "back_date": row["back_date"],
         "nights": (back - out).days,
         "is_direct": None if row["is_direct"] is None else bool(row["is_direct"]),
@@ -198,7 +209,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         # EUR 620 while the card said EUR 710, and a carried-over price the
         # card showed produced an empty grid here.
         pairs = []
-        for r in opp.latest_priced_rows(conn, holiday_id, night, dst):
+        for r in opp.latest_priced_rows(conn, holiday_id, night, dst, cfg=cfg):
             out_d = date.fromisoformat(r["out_date"])
             back_d = date.fromisoformat(r["back_date"])
             nights = (back_d - out_d).days
@@ -402,7 +413,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             # the holiday's best deal is chosen by EFFECTIVE price (fare +
             # trip-length logistics), so a RIX bargain competes honestly
             # against TLL after the drive and parking are counted
-            best_rows = _best_by_watch(conn, h.id, night)
+            best_rows = _best_by_watch(cfg, conn, h.id, night)
             payloads = []
             for (og, dest), row in best_rows.items():
                 p = _best_payload(cfg, h, row)
@@ -435,7 +446,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             raise HTTPException(404, f"unknown holiday {holiday_id}")
         conn = _conn(cfg)
         night = dbm.latest_night(conn)
-        best_rows = _best_by_watch(conn, holiday_id, night)
+        best_rows = _best_by_watch(cfg, conn, holiday_id, night)
         from app import metrics
         rows = []
         for w in conn.execute(

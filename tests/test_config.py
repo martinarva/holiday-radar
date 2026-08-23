@@ -80,3 +80,24 @@ def test_unknown_active_holiday_rejected(tmp_path):
         (tmp_path / "presets" / f).write_text((ROOT / "presets" / f).read_text())
     with pytest.raises(ValueError, match="unknown holiday ids"):
         load_config(tmp_path / "config.yaml")
+
+
+def test_an_early_out_and_a_late_return_are_two_hotel_nights():
+    """One room before the flight, one after landing back.
+
+    hotel_needed() was a boolean, so a Helsinki trip leaving at 08:00 and
+    returning at 23:30 was billed a single EUR 90 night and the second one
+    silently disappeared.
+    """
+    cfg = load_config(ROOT / "config.yaml")
+    hel = cfg.origin("HEL")
+    out_early, back_late = "2026-10-26T08:00", "2026-11-01T23:30"
+    out_late, back_early = "2026-10-26T14:00", "2026-11-01T15:00"
+
+    assert hel.hotel_nights(out_early, back_late) == 2
+    assert hel.hotel_nights(out_late, back_late) == 1     # return only
+    assert hel.hotel_nights(out_early, back_early) == 1   # departure only
+    assert hel.hotel_nights(out_late, back_early) == 0
+    # the boolean stays true wherever a room is needed at all
+    assert hel.hotel_needed(out_early, back_late) is True
+    assert hel.hotel_needed(out_late, back_early) is False

@@ -396,7 +396,8 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             break
         if dbm.recent_verification_exists(
                 conn, r.holiday_id, r.origin, r.destination,
-                o.out_date.isoformat(), o.back_date.isoformat(), night=night):
+                o.out_date.isoformat(), o.back_date.isoformat(), night=night,
+                candidate_source=o.source):
             continue
         reason = f"indicative family {fam:.0f} <= 1.25 x notify"
         if o.source in ULCC_SOURCES:
@@ -424,7 +425,8 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 reason=(f"{reason}; source={o.source}, not on Google — this "
                         f"is the cheapest alternative NOT flown by "
                         f"{_carrier_name(o.source)}, NOT a verification"),
-                indicative_family_eur=fam, night=night)
+                indicative_family_eur=fam, night=night,
+                candidate_source=o.source)
             time.sleep(pace)
             continue
         if o.source == "google_flights":
@@ -438,7 +440,8 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 airlines=json.dumps((o.raw or {}).get("airlines", [])),
                 legs=json.dumps((o.raw or {}).get("legs", [])),
                 level="flight-verified", reason=reason,
-                indicative_family_eur=fam, night=night)
+                indicative_family_eur=fam, night=night,
+                candidate_source=o.source)
             continue
         used_verify += 1
         try:
@@ -459,7 +462,8 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             airlines=json.dumps(list(best.airlines)) if best else "[]",
             legs=json.dumps(list(best.legs)) if best else "[]",
             level="flight-verified" if best else "verify-no-result",
-            reason=reason, indicative_family_eur=fam, night=night)
+            reason=reason, indicative_family_eur=fam, night=night,
+                candidate_source=o.source)
         time.sleep(pace)
     log(f"verify hook: {used_verify}/{verify_budget} candidates handled "
         f"(pool {len(candidates)})")

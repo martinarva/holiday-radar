@@ -419,3 +419,37 @@ def test_the_coverage_identity_counts_a_union_not_a_formula(cfg):
     assert s["airbaltic_covered"] == 1 and s["wizzair_covered"] == 1
     assert s["carrier_covered"] == 1, "one watch, however many carriers found it"
     assert s["covered_direct"] + s["covered_1stop"] == s["carrier_covered"]
+
+
+def test_sampler_output_is_not_mistaken_for_carrier_coverage(cfg, tmp_path):
+    """A Google-only watch is BLIND, not airBaltic-covered.
+
+    rows_from_db routed every unrecognised source into bt_candidates, so a
+    Google-only blind watch reported airbaltic_covered=1 and blind_active=0
+    and the exit gate scored a lie as a pass.
+    """
+    from datetime import date
+
+    from app.dryrun import compute_metrics, rows_from_db
+
+    conn_path = tmp_path / "r.db"
+    conn = dbm.init_db(conn_path)
+    h = cfg.holiday("autumn-2026")
+    dbm.upsert_observations(conn, h.id, [Observation(
+        origin="TLL", destination="AGP", out_date=date(2026, 10, 26),
+        back_date=date(2026, 11, 1), price_adult_eur=200.0,
+        source="google_flights", estimated_family_eur=800.0,
+        is_direct=True)], seats=4, night="2026-08-23")
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "TLL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "blind"}])
+    conn.close()
+
+    conn = dbm.init_db(conn_path)
+    relevant, _night = rows_from_db(cfg, conn)
+    hols = {x.id: x for x in cfg.active_holidays()}
+    s, _, _ = compute_metrics(cfg, hols, relevant, TODAY, theoretical=1)
+    assert s["airbaltic_covered"] == 0, "the sampler is not a carrier"
+    assert s["carrier_covered"] == 0
+    assert s["blind_active"] == 1

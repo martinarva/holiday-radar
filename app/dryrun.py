@@ -365,8 +365,13 @@ def rows_from_db(cfg: Config, conn, night: str | None = None
             elif obs.source == "wizzair":
                 if r.wz_pair is None or obs.price_adult_eur < r.wz_pair.price_adult_eur:
                     r.wz_pair = obs
-            else:
+            elif obs.source == "airbaltic":
                 r.bt_candidates.append(obs)
+            # Anything else — google_flights above all — is SAMPLER output,
+            # not carrier coverage. Letting it fall into bt_candidates turned
+            # a Google-only blind watch into "airbaltic_covered = 1,
+            # blind_active = 0", so the exit gate's coverage identity was fed
+            # a lie and could pass on it.
     for r in rows.values():
         r.bt_candidates.sort(key=lambda x: x.price_adult_eur)
     return list(rows.values()), night

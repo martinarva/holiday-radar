@@ -14,6 +14,11 @@ preferences:
   # old steep curve a EUR 796 Tallinn option lost to a EUR 866 Riga one purely
   # on three school days.
   school_days_ok: 3
+  # How long a price may be carried after its source last confirmed it. A
+  # carrier that returns its whole calendar and then omits a pair is telling
+  # us the flight is gone; without a ceiling, per-pair history resurrects it
+  # forever.
+  stale_after_nights: 3
   # What the family can absorb for the whole trip (flights + getting to the
   # airport + any forced hotel). Ranking blends "cheap for this destination"
   # with "affordable in absolute terms" — without the second half a EUR 2115

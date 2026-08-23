@@ -237,7 +237,8 @@ def effective_cost(cfg: Config, flights_eur, logistics_eur,
 
 
 def latest_priced_rows(conn, holiday_id: str, night: str | None,
-                       destination: str | None = None) -> list[dict]:
+                       destination: str | None = None,
+                       cfg: Config | None = None) -> list[dict]:
     """Every watch's most recent priced row at or before `night`, per SOURCE.
 
     THE query for "what do we know tonight". Both the opportunity list and
@@ -250,12 +251,16 @@ def latest_priced_rows(conn, holiday_id: str, night: str | None,
     """
     if not night:
         return []
-    # Latest per (origin, destination, source, DATE PAIR). Grouping without
-    # the date pair works only for a full-grid night, where every pair is
-    # refreshed together. With `sampler.pairs_per_watch > 0` — the throttle
-    # mode the config still offers — tonight's single pair became the source's
-    # newest night and silently deleted every pair sampled on earlier nights,
-    # so the rotating grid never accumulated.
+    # Latest per (origin, destination, source, DATE PAIR), then aged out.
+    #
+    # Per-pair is required for throttle mode (`sampler.pairs_per_watch > 0`),
+    # where a night samples one pair and grouping any coarser deletes the
+    # rest of the rotating grid. But it cuts the other way for a source that
+    # returns its WHOLE calendar in one call: if airBaltic priced a pair
+    # yesterday and today's full answer omits it, the flight is sold out or
+    # withdrawn — and per-pair history would keep resurrecting it forever.
+    # The TTL settles it: a pair nobody has confirmed for `stale_after_nights`
+    # is dropped rather than carried indefinitely.
     sql = """
         SELECT o.* FROM observations o
         JOIN (SELECT origin, destination, source, out_date, back_date,
@@ -278,13 +283,25 @@ def latest_priced_rows(conn, holiday_id: str, night: str | None,
     sql = sql.format(
         dst_inner="AND destination=?" if destination else "",
         dst_outer="AND o.destination=?" if destination else "")
+    ttl = int((cfg.preferences or {}).get("stale_after_nights", 3)) if cfg else 3
     rows = []
     for r in conn.execute(sql, params):
         row = dict(r)
         row["_from_night"] = (None if r["observed_night"] == night
                               else r["observed_night"])
+        # ">= ttl": stale_after_nights: 3 means a reading three nights old
+        # IS stale, not that it survives a fourth.
+        if row["_from_night"] and _nights_apart(row["_from_night"], night) >= ttl:
+            continue        # nobody has seen this fare in days; let it go
         rows.append(row)
     return rows
+
+
+def _nights_apart(a: str, b: str) -> int:
+    try:
+        return abs((date.fromisoformat(b) - date.fromisoformat(a)).days)
+    except (TypeError, ValueError):
+        return 0
 
 
 def row_costs(cfg: Config, row, nights: int) -> dict:
@@ -297,10 +314,11 @@ def row_costs(cfg: Config, row, nights: int) -> dict:
     logistics = og.logistics_eur(nights) if og else 0.0
     overnight = _col(row, "layover_overnight")
     lay_hotel = layover_hotel_eur(cfg, overnight)
-    origin_hotel = 0.0
-    if og and og.hotel_needed(_col(row, "out_departure"),
-                              _col(row, "in_arrival")):
-        origin_hotel = float(og.hotel_eur or 0)
+    # 0, 1 or 2 nights: an early departure out and a late arrival back are
+    # separate rooms, and charging for one lost the other.
+    nights_hotel = og.hotel_nights(_col(row, "out_departure"),
+                                   _col(row, "in_arrival")) if og else 0
+    origin_hotel = float(og.hotel_eur or 0) * nights_hotel if og else 0.0
     fare = row["estimated_family_eur"]
     return {
         "flights_eur": fare,
@@ -338,12 +356,19 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
     origin_hotel = costs["origin_hotel_eur"] or 0.0
     observed = datetime.fromisoformat(row["observed_at"])
     age_h = round((_now() - observed).total_seconds() / 3600, 1)
+    # Matched on the SOURCE too. A verification belongs to the candidate it
+    # checked: without this an airBaltic check was pasted onto every provider
+    # for the same pair, and a Wizz EUR 400 was displayed "flight-verified"
+    # by a EUR 550 check that had nothing to do with it. Rows written before
+    # the column existed carry NULL and still match their own pair.
     verified = conn.execute("""
         SELECT level, price_total_eur, verified_at FROM verifications
         WHERE holiday_id=? AND origin=? AND destination=? AND out_date=?
-          AND back_date=? ORDER BY id DESC LIMIT 1
+          AND back_date=?
+          AND (candidate_source = ? OR candidate_source IS NULL)
+        ORDER BY (candidate_source IS NULL), id DESC LIMIT 1
     """, (row["holiday_id"], row["origin"], row["destination"],
-          row["out_date"], row["back_date"])).fetchone()
+          row["out_date"], row["back_date"], row["source"])).fetchone()
     return {
         "origin": og.code,
         "flights_eur": costs["flights_eur"],
@@ -480,7 +505,7 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
     # airBaltic EUR 500 — which then produced no alert, because the winner
     # was carried over. Cost and quality decide, and they are not known yet.
     pair_rows: dict[tuple[str, str], list[dict]] = {}
-    for row in latest_priced_rows(conn, holiday.id, night):
+    for row in latest_priced_rows(conn, holiday.id, night, cfg=cfg):
         pair_rows.setdefault((row["origin"], row["destination"]), []).append(row)
 
     states = {(r["origin"], r["destination"]): dict(r) for r in conn.execute(
@@ -588,9 +613,18 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
         cheapest = min(every, key=lambda o: o["effective_eur"])
         zero_school = min((o for o in every if o["school_days"] == 0),
                           key=lambda o: o["effective_eur"], default=None)
-        # what the alerting may speak about: tonight's data only
+        # What the alerting may speak about: tonight's data only. Two
+        # answers, because the rules ask different questions — "did the top
+        # pick change" wants the best-scoring one, while "is this under the
+        # buy threshold" and "is this an all-time low" both want the cheapest.
+        # Handing every rule the highest-scoring fresh option collapsed the
+        # full candidate set right back down to one wrong answer: a EUR 600
+        # connection under the threshold went unannounced because a EUR 700
+        # nonstop outscored it.
         fresh = [o for o in every if not o.get("from_night")]
         best_fresh = max(fresh, key=lambda o: o["score"]) if fresh else None
+        cheapest_fresh = (min(fresh, key=lambda o: o["effective_eur"])
+                          if fresh else None)
         best_market = max((o["market"].get("score") or -1) for o in every)
 
         out.append({
@@ -602,6 +636,7 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
             "origin_options": sorted(options, key=lambda o: o["effective_eur"]),
             "best_option": best, "cheapest_option": cheapest,
             "best_fresh_option": best_fresh,
+            "cheapest_fresh_option": cheapest_fresh,
             "zero_school_option": zero_school,
             "recommendation_score": best["score"],
             "market_score": best_market if best_market >= 0 else None,

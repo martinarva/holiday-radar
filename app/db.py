@@ -247,6 +247,13 @@ MIGRATIONS: list[tuple[str, str]] = [
 
     ("0037_observation_layover_certain", """
         ALTER TABLE observations ADD COLUMN layover_certain INTEGER"""),
+
+    ("0038_verification_source", """
+        ALTER TABLE verifications ADD COLUMN candidate_source TEXT"""),
+    ("0039_verification_source_idx", """
+        CREATE INDEX IF NOT EXISTS ix_verif_candidate
+          ON verifications (holiday_id, origin, destination, out_date,
+                            back_date, candidate_source)"""),
 ]
 
 # source -> operating carrier when the source implies it
@@ -535,7 +542,8 @@ def insert_verification(conn: sqlite3.Connection, *, holiday_id: str,
                         back_date: str, price_total_eur: float | None,
                         airlines: str, legs: str, level: str, reason: str,
                         indicative_family_eur: float | None,
-                        night: str | None = None) -> None:
+                        night: str | None = None,
+                        candidate_source: str | None = None) -> None:
     """`night` is the run's LOCAL date, same as observations and offers.
 
     Deriving it from UTC left verifications filed under a different night
@@ -546,19 +554,25 @@ def insert_verification(conn: sqlite3.Connection, *, holiday_id: str,
         INSERT INTO verifications
           (holiday_id, origin, destination, out_date, back_date,
            verified_night, verified_at, price_total_eur, airlines, legs,
-           level, reason, indicative_family_eur)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+           level, reason, indicative_family_eur, candidate_source)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (holiday_id, origin, destination, out_date, back_date,
           night or now.date().isoformat(), now.isoformat(), price_total_eur,
-          airlines, legs, level, reason, indicative_family_eur))
+          airlines, legs, level, reason, indicative_family_eur,
+          candidate_source))
     conn.commit()
 
 
 def recent_verification_exists(conn: sqlite3.Connection, holiday_id: str,
                                origin: str, destination: str, out_date: str,
                                back_date: str, within_nights: int = 3,
-                               night: str | None = None) -> bool:
-    """Was this pair verified within the last `within_nights` nights?
+                               night: str | None = None,
+                               candidate_source: str | None = None) -> bool:
+    """Was THIS candidate verified within the last `within_nights` nights?
+
+    Keyed on the source as well as the route. Without it an airBaltic
+    verification blocked the Wizz market-context check for the same pair —
+    two different questions about two different fares.
 
     `night` is the run's LOCAL date. Measuring the window from UTC "today"
     disagreed with the locally-stamped verified_night at the 02:45 boundary
@@ -568,7 +582,9 @@ def recent_verification_exists(conn: sqlite3.Connection, holiday_id: str,
         SELECT MAX(verified_night) n FROM verifications
         WHERE holiday_id=? AND origin=? AND destination=?
           AND out_date=? AND back_date=?
-    """, (holiday_id, origin, destination, out_date, back_date)).fetchone()
+          AND (candidate_source IS ? OR ? IS NULL)
+    """, (holiday_id, origin, destination, out_date, back_date,
+          candidate_source, candidate_source)).fetchone()
     if not r or not r["n"]:
         return False
     from datetime import date, timedelta

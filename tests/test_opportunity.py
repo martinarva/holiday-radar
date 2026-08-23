@@ -336,8 +336,10 @@ def test_a_late_return_charges_the_origins_hotel(cfg, tmp_path):
                     price_adult_eur=100.0, source="ryanair",
                     price_basis="quoted_rt", estimated_family_eur=400.0,
                     is_direct=True,
-                    raw={"times": {"out_departure": "2026-10-25T10:00",
-                                   "out_arrival": "2026-10-25T14:00",
+                    # departs late enough to need no room the night before,
+                    # so only the late RETURN is under test here
+                    raw={"times": {"out_departure": "2026-10-25T14:00",
+                                   "out_arrival": "2026-10-25T18:00",
                                    "in_departure": "2026-11-01T19:00",
                                    "in_arrival": "2026-11-01T23:55"}})
     dbm.upsert_observations(conn, h.id, [o], seats=4, night="2026-08-23")
@@ -546,3 +548,89 @@ def test_a_half_known_itinerary_keeps_the_hotel_risk(cfg, tmp_path):
     assert opt["origin_hotel_eur"] is None      # nothing proven yet
     assert opt["hotel_risk_eur"] == hel.hotel_eur, \
         "the return arrival is unknown, so the risk still stands"
+
+
+def test_a_verification_belongs_to_the_candidate_it_checked(cfg, tmp_path):
+    """Keyed on the route alone, one check was pasted onto every provider.
+
+    An airBaltic verification of EUR 550 made a Wizz EUR 400 for the same
+    pair read "flight-verified", and it blocked the Wizz market-context check
+    behind a cooldown that was never about Wizz.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+    for src, fam in (("airbaltic", 550.0), ("wizzair", 400.0)):
+        dbm.upsert_observations(conn, h.id, [Observation(
+            origin="TLL", destination="FCO", out_date=out, back_date=back,
+            price_adult_eur=round(fam / 4, 2), source=src,
+            price_basis="family_quote", estimated_family_eur=fam,
+            is_direct=True)], seats=4, night="2026-08-23")
+    dbm.insert_verification(
+        conn, holiday_id=h.id, origin="TLL", destination="FCO",
+        out_date=out.isoformat(), back_date=back.isoformat(),
+        price_total_eur=550.0, airlines="[]", legs="[]",
+        level="flight-verified", reason="checked", indicative_family_eur=550.0,
+        night="2026-08-23", candidate_source="airbaltic")
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "TLL", "destination": "FCO",
+        "status": "eligible", "score": 10.0, "rule": "warm_city",
+        "dormant": False, "coverage_class": "covered_direct"}])
+
+    by_source = {o["source"]: o for o in
+                 opp.build(cfg, conn, h, night="2026-08-23",
+                           climate_cache={})[0]["origin_options"]}
+    # only one origin contributes, so inspect every scored candidate instead
+    fco = opp.build(cfg, conn, h, night="2026-08-23", climate_cache={})[0]
+    wizz = fco["cheapest_option"]
+    assert wizz["source"] == "wizzair"
+    assert wizz["verification"]["level"] == "indicative", \
+        "someone else's check is not this fare's verification"
+    assert by_source  # the origin table still renders
+
+    # ...and the cooldown is per candidate, so Wizz can still be checked
+    assert dbm.recent_verification_exists(
+        conn, h.id, "TLL", "FCO", out.isoformat(), back.isoformat(),
+        night="2026-08-23", candidate_source="airbaltic")
+    assert not dbm.recent_verification_exists(
+        conn, h.id, "TLL", "FCO", out.isoformat(), back.isoformat(),
+        night="2026-08-23", candidate_source="wizzair")
+
+
+def test_a_withdrawn_flight_is_not_resurrected_forever(cfg, tmp_path):
+    """Per-pair history serves throttle mode but must not outlive the fare.
+
+    airBaltic returns its whole calendar in one call, so a pair missing from
+    today's answer is sold out or withdrawn. Without a ceiling the last
+    sighting was carried indefinitely and a EUR 300 flight that no longer
+    exists kept winning.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    gone = (date(2026, 10, 23), date(2026, 11, 1))
+    still = (date(2026, 10, 26), date(2026, 11, 1))
+
+    def obs(pair, fam, night):
+        dbm.upsert_observations(conn, h.id, [Observation(
+            origin="TLL", destination="AGP", out_date=pair[0],
+            back_date=pair[1], price_adult_eur=round(fam / 4, 2),
+            source="airbaltic", price_basis="family_quote",
+            estimated_family_eur=fam, is_direct=True)], seats=4, night=night)
+
+    obs(gone, 300.0, "2026-08-20")          # last seen five nights ago
+    obs(still, 900.0, "2026-08-23")
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "TLL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "covered_direct"}])
+
+    rows = opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg)
+    assert [r["out_date"] for r in rows] == ["2026-10-26"]
+    agp = opp.build(cfg, conn, h, night="2026-08-23", climate_cache={})[0]
+    assert agp["cheapest_option"]["effective_eur"] == 900.0
+
+    # inside the window it is still carried, clearly labelled
+    obs(gone, 300.0, "2026-08-22")
+    rows = opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg)
+    carried = [r for r in rows if r["_from_night"]]
+    assert len(carried) == 1 and carried[0]["_from_night"] == "2026-08-22"
