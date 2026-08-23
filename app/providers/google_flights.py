@@ -118,8 +118,8 @@ class GoogleFlights:
                           max_stops: int | None = None) -> list[VerifiedOffer]:
         """Family-total offers for one exact date pair, cheapest first."""
         try:
-            from fast_flights import FlightQuery, Passengers, create_query
             import fast_flights.parser as ff_parser
+            from fast_flights import FlightQuery, Passengers, create_query
         except ImportError as e:
             raise ProviderError(
                 "google_flights: fast-flights not installed "

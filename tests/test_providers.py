@@ -78,6 +78,7 @@ def test_consent_picker_none_on_formless_page():
 
 def test_months_span_single_and_cross_month():
     from datetime import date as d
+
     from app.providers.travelpayouts import months_span
     assert months_span((d(2026, 10, 23), d(2026, 10, 28))) == ["2026-10"]
     assert months_span((d(2026, 10, 30), d(2026, 11, 4))) == ["2026-10", "2026-11"]

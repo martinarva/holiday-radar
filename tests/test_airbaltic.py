@@ -2,7 +2,9 @@ from datetime import date
 
 from app.holidays import Holiday
 from app.providers.airbaltic import (
-    candidates_from_grids, parse_inbound_days, parse_outbound_days,
+    candidates_from_grids,
+    parse_inbound_days,
+    parse_outbound_days,
 )
 
 AUTUMN = Holiday(id="autumn-2026", name="Autumn 2026",
@@ -66,14 +68,15 @@ def test_candidates_all_valid_pairs_leg_sum_and_direct_flag():
 def test_ryanair_duration_filter_semantics():
     from app.providers.base import Observation
     from app.providers.ryanair import filter_for_holiday
-    mk = lambda o, b: Observation(origin="RIX", destination="BCN",
-                                  out_date=o, back_date=b,
-                                  price_adult_eur=100.0, source="ryanair")
+    def mk(o, b):
+            return Observation(origin="RIX", destination="BCN",
+                                      out_date=o, back_date=b,
+                                      price_adult_eur=100.0, source="ryanair")
     obs = [
-        mk(date(2026, 10, 27), date(2026, 10, 30)),   # 3 nights — too short
-        mk(date(2026, 10, 26), date(2026, 11, 1)),    # 6 nights — valid
-        mk(date(2026, 10, 15), date(2026, 11, 1)),    # outside window
+            mk(date(2026, 10, 27), date(2026, 10, 30)),   # 3 nights — too short
+            mk(date(2026, 10, 26), date(2026, 11, 1)),    # 6 nights — valid
+            mk(date(2026, 10, 15), date(2026, 11, 1)),    # outside window
     ]
     kept = filter_for_holiday(obs, AUTUMN)
     assert [(o.out_date, o.back_date) for o in kept] == [
-        (date(2026, 10, 26), date(2026, 11, 1))]
+            (date(2026, 10, 26), date(2026, 11, 1))]

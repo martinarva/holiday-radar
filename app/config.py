@@ -41,6 +41,24 @@ class Origin:
                                        # applied at verify (stage A lacks times)
     hotel_if_departure_before: str = ""   # "HH:MM"; empty = never
     hotel_if_arrival_after: str = ""      # "HH:MM"; empty = never
+
+    def hotel_needed(self, out_departure: str | None,
+                     in_arrival: str | None) -> bool:
+        """Does this origin force a hotel night for these clock times?
+
+        Riga is drivable overnight, Helsinki is not — the rules encode that.
+        Returns False when the times are unknown, so an unverified itinerary
+        is never charged for a room it might not need; the UI still shows the
+        amount as a risk.
+        """
+        def _before(t: str | None, limit: str) -> bool:
+            return bool(limit and t and str(t)[11:16] < limit)
+
+        def _after(t: str | None, limit: str) -> bool:
+            return bool(limit and t and str(t)[11:16] > limit)
+
+        return (_before(out_departure, self.hotel_if_departure_before)
+                or _after(in_arrival, self.hotel_if_arrival_after))
     extra_time_h: float = 0.0          # displayed only — never auto-priced
     note: str = ""
 

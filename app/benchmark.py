@@ -16,7 +16,6 @@ import statistics
 from dataclasses import dataclass, field
 
 from app.config import Config
-from app.holidays import Holiday
 from app.providers import ProviderError
 from app.providers import travelpayouts as tp
 from app.providers.base import Observation

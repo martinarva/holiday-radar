@@ -39,7 +39,7 @@ from app import db as dbm
 from app import dryrun
 from app.config import Config
 from app.holidays import Holiday
-from app.providers.base import CONF_EXACT_PAIR, Observation, ProviderError
+from app.providers.base import CONF_EXACT_PAIR, ULCC_SOURCES, Observation, ProviderError
 
 PAIR_CLASSES = ("zero_school_7_9", "zero_school_other", "mixed_rep", "edge")
 FLOOR_NIGHTS = 14
@@ -158,7 +158,8 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                + ([r.wz_pair] if r.wz_pair else []))
         if obs:
             carrier_obs += dbm.upsert_observations(conn, r.holiday_id, obs,
-                                                   seats, role="discovery")
+                                                   seats, role="discovery",
+                                                   night=night)
     dbm.write_watch_state(conn, [{
         "holiday_id": r.holiday_id, "origin": r.origin,
         "destination": r.destination, "status": r.status, "score": r.score,
@@ -180,6 +181,9 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 adults=cfg.passengers.adults, children=cfg.passengers.children)
 
     state = dbm.sampler_state_all(conn)
+    # Staged separately: a watch's rotation only advances if its query
+    # survives the budget cut below.
+    pending_state: dict[tuple, dict] = {}
 
     def last_night_of(r):
         s = state.get((r.holiday_id, r.origin, r.destination))
@@ -217,10 +221,16 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 if pair is None:
                     break
                 tasks.append((r, pair))
-        state[(r.holiday_id, r.origin, r.destination)] = {
+        pending_state[(r.holiday_id, r.origin, r.destination)] = {
             "rotation_idx": idx, "last_google_night": night}
     if google_budget:
         tasks = tasks[:google_budget]
+    # Rotation and last_google_night may only advance for watches we really
+    # query. Recording them before the budget cut told the UI that all four
+    # watches had been tried when only one had, so "still scanning" turned
+    # into a silent, permanent "nothing flies here".
+    queried = {(r.holiday_id, r.origin, r.destination) for r, _ in tasks}
+    state.update({k: v for k, v in pending_state.items() if k in queried})
 
     best_per_watch: dict[tuple, Observation] = {}
     used_discovery = 0
@@ -241,9 +251,11 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             return
         if not offers:
             return
-        dbm.upsert_offers(conn, r.holiday_id, offers, seats, role="discovery")
+        dbm.upsert_offers(conn, r.holiday_id, offers, seats, role="discovery",
+                          night=night)
         o = offer_to_observation(cfg, offers[0])
-        dbm.upsert_observations(conn, r.holiday_id, [o], seats, role="discovery")
+        dbm.upsert_observations(conn, r.holiday_id, [o], seats,
+                                role="discovery", night=night)
         k = (r.holiday_id, r.origin, r.destination)
         if k not in best_per_watch or o.price_adult_eur < best_per_watch[k].price_adult_eur:
             best_per_watch[k] = o
@@ -288,7 +300,14 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
     used_audit = 0
     for r in (rng.sample(covered, min(audit_budget, len(covered)))
               if covered else []):
-        cands = list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
+        # Every carrier that can make a watch "covered" must be able to supply
+        # the audit candidate. Wizz counts as covered_direct, so leaving it out
+        # here made min() run on an empty list and a single unlucky sample
+        # could kill the whole night with a ValueError.
+        cands = (list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
+                 + ([r.wz_pair] if r.wz_pair else []))
+        if not cands:
+            continue
         best = min(cands, key=lambda x: x.price_adult_eur)
         used_audit += 1
         try:
@@ -298,10 +317,11 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             errors.append(f"google audit {r.origin}-{r.destination}: {e}")
             continue
         if offers:
-            dbm.upsert_offers(conn, r.holiday_id, offers, seats, role="audit")
+            dbm.upsert_offers(conn, r.holiday_id, offers, seats, role="audit",
+                              night=night)
             o = offer_to_observation(cfg, offers[0])
             dbm.upsert_observations(conn, r.holiday_id, [o], seats,
-                                    role="audit")
+                                    role="audit", night=night)
         time.sleep(pace)
     log(f"audit: {used_audit}/{audit_budget} carrier-covered re-quoted")
 
@@ -328,7 +348,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
     # Verifiable candidates first: Google cannot price Ryanair (proven
     # 2026-08-23), so a Ryanair candidate checked here yields the cheapest
     # NON-Ryanair alternative — useful market context, never a verification.
-    candidates.sort(key=lambda t: (t[2].source == "ryanair", t[0]))
+    candidates.sort(key=lambda t: (t[2].source in ULCC_SOURCES, t[0]))
 
     used_verify = 0
     for fam, r, o in candidates:
@@ -339,7 +359,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 o.out_date.isoformat(), o.back_date.isoformat()):
             continue
         reason = f"indicative family {fam:.0f} <= 1.25 x notify"
-        if o.source == "ryanair":
+        if o.source in ULCC_SOURCES:
             used_verify += 1
             try:
                 offers = google_search(r.origin, r.destination,
@@ -349,7 +369,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 continue
             if offers:
                 dbm.upsert_offers(conn, r.holiday_id, offers, seats,
-                                  role="verification")
+                                  role="verification", night=night)
             best = offers[0] if offers else None
             dbm.insert_verification(
                 conn, holiday_id=r.holiday_id, origin=r.origin,
@@ -386,7 +406,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             continue
         if offers:
             dbm.upsert_offers(conn, r.holiday_id, offers, seats,
-                              role="verification")
+                              role="verification", night=night)
         best = offers[0] if offers else None
         dbm.insert_verification(
             conn, holiday_id=r.holiday_id, origin=r.origin,
@@ -407,7 +427,9 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
     # morning.
     alerts_queued = 0
     try:
-        from app import climate as climate_mod, notify, opportunity as opp
+        from app import climate as climate_mod
+        from app import notify
+        from app import opportunity as opp
         cache = climate_mod.load_cache(cfg)
         for h in cfg.active_holidays():
             items = opp.build(cfg, conn, h, night, cache)

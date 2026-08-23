@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app import db as dbm, metrics
-from app.config import load_config
+from app import db as dbm
+from app import metrics
 from app.providers.base import Observation
 
 ROOT = Path(__file__).parent.parent

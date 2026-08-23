@@ -1,4 +1,3 @@
-from datetime import date
 from pathlib import Path
 
 from app.climate import ELIGIBLE, EXCLUDED, MARGINAL, classify

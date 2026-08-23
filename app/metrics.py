@@ -11,6 +11,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import date
 
+from app.providers.base import ULCC_SOURCES
+
 
 def _best_per_night(conn: sqlite3.Connection, holiday_id: str, origin: str,
                     destination: str, roles=("discovery",)
@@ -82,10 +84,10 @@ def audit_deltas(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
     out = []
     for r in rows:
         g, c = r["google_eur"], r["carrier_eur"]
-        # Google does not index Ryanair, so a Ryanair-vs-Google delta measures
-        # the non-Ryanair market, not provider bias. Only airBaltic (which IS
-        # on Google) yields a comparable delta.
-        comparable = r["carrier"] != "ryanair"
+        # Google indexes no ULCC, so a Ryanair- or Wizz-vs-Google delta
+        # measures the rest of the market, not provider bias. Only carriers
+        # Google actually lists (airBaltic) yield a comparable delta.
+        comparable = r["carrier"] not in ULCC_SOURCES
         out.append({
             "holiday_id": r["holiday_id"], "origin": r["origin"],
             "destination": r["destination"], "night": r["observed_night"],

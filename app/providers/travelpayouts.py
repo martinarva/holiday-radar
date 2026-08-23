@@ -18,7 +18,10 @@ import urllib.request
 from datetime import date, datetime, timezone
 
 from app.providers.base import (
-    CONF_EXACT_PAIR, CONF_MONTH_GRID, Observation, ProviderError,
+    CONF_EXACT_PAIR,
+    CONF_MONTH_GRID,
+    Observation,
+    ProviderError,
 )
 
 PRICES_FOR_DATES = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates"

@@ -1,0 +1,27 @@
+# `ruff check` is the gate; `ruff format` deliberately is NOT run over this
+# codebase. Comments here are aligned to the code they annotate and several
+# blocks are wrapped by hand to keep an explanation next to the line it
+# explains — autoformatting flattens both. Run:
+#
+#     ruff check app tests
+#
+# Most of the tree sits inside 88 columns; the few long lines are report
+# strings and SQL where breaking them hurts more than it helps.
+line-length = 88
+
+[lint]
+extend-select = [
+    "E",      # pycodestyle
+    "F",      # pyflakes
+    "I",      # import sorting
+    "B",      # bugbear
+    "UP",     # pyupgrade
+]
+ignore = [
+    "E501",   # long lines: see the note above
+    "B008",   # FastAPI's Depends() in defaults is the framework's idiom
+]
+
+[lint.per-file-ignores]
+# Tests read better with the fixture and the assertion side by side.
+"tests/*" = ["E402"]

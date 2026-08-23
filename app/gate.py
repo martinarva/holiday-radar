@@ -60,7 +60,7 @@ def run_checks(cfg: Config, db_path, min_runs: int = 3,
                         f"{dupes} duplicate keys"))
 
     # a run that logged provider errors but still completed = fail-soft proof
-    with_err = [(r, s) for r, s in zip(runs, summaries)
+    with_err = [(r, s) for r, s in zip(runs, summaries, strict=True)
                 if json.loads(r["errors_json"] or "[]")]
     completed_with_err = [r for r, s in with_err if r["finished_at"]]
     checks.append(Check(

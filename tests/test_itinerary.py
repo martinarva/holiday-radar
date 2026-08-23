@@ -66,6 +66,21 @@ def test_a_too_tight_connection_is_not_rewarded():
     assert it.layover_score(it.connection_of(legs)) < 9.0
 
 
+def test_one_unreadable_gap_taints_the_whole_connection():
+    """A three-leg trip: first wait 2 h, second unknown.
+
+    The unknown gap could be the overnight, so the comfortable 9.0 the known
+    half earns must not stand for the whole itinerary.
+    """
+    legs = [_leg("TLL", "WAW", "2026-10-26T06:00", "2026-10-26T08:00"),
+            _leg("WAW", "MUC", "2026-10-26T10:00", None),
+            _leg("MUC", "TIA", None, "2026-10-27T09:00")]
+    c = it.connection_of(legs)
+    assert c.unparsed is True and c.certain is False
+    assert len(c.layovers) == 1 and c.layovers[0].hours == 2.0
+    assert it.layover_score(c) <= 6.0, "a readable half cannot vouch for the rest"
+
+
 def test_unreadable_times_are_flagged_not_silently_clean():
     legs = [_leg("TLL", "WAW", "2026-10-26T06:00", None),
             _leg("WAW", "TIA", None, "2026-10-26T10:00")]

@@ -182,3 +182,53 @@ def test_airline_stored_for_every_source(cfg, tmp_path):
            conn.execute("SELECT source, airlines FROM observations")}
     assert got == {"airbaltic": ["airBaltic"], "ryanair": ["Ryanair"],
                    "google_flights": ["LOT", "Austrian"]}
+
+
+def test_a_run_stamps_its_own_local_night_not_utc():
+    """A 02:45 Europe/Tallinn cycle must not file its rows under yesterday.
+
+    observed_night used to come from observed_at (UTC), so a run recorded as
+    "2026-08-23" wrote observations dated "2026-08-22" and every downstream
+    query keyed on the run's night — alerts included — found nothing.
+    """
+    from datetime import datetime, timezone
+
+    conn = dbm.init_db(":memory:")
+    # 02:45 Tallinn on the 23rd is 23:45 UTC on the 22nd
+    utc_stamp = datetime(2026, 8, 22, 23, 45, tzinfo=timezone.utc)
+    o = Observation(origin="TLL", destination="AGP",
+                    out_date=date(2026, 10, 26), back_date=date(2026, 11, 1),
+                    price_adult_eur=100.0, source="airbaltic",
+                    observed_at=utc_stamp, estimated_family_eur=400.0)
+    dbm.upsert_observations(conn, "autumn-2026", [o], seats=4,
+                            night="2026-08-23")
+    row = conn.execute("SELECT observed_night FROM observations").fetchone()
+    assert row["observed_night"] == "2026-08-23"
+    assert dbm.latest_night(conn) == "2026-08-23"
+
+
+def test_an_audit_sits_beside_its_discovery_row_not_on_top_of_it():
+    """observation_role belongs in the unique key.
+
+    The audit re-quotes a pair the carrier already priced, precisely so the
+    two can be compared. With role outside the key the audit overwrote the
+    discovery row it was measuring, and carrier_vs_google_delta compared a
+    number against itself.
+    """
+    conn = dbm.init_db(":memory:")
+    base = dict(origin="TLL", destination="AGP", out_date=date(2026, 10, 26),
+                back_date=date(2026, 11, 1), source="airbaltic")
+    disc = Observation(**base, price_adult_eur=100.0, estimated_family_eur=400.0)
+    audit = Observation(**base, price_adult_eur=125.0, estimated_family_eur=500.0)
+    dbm.upsert_observations(conn, "autumn-2026", [disc], seats=4,
+                            role="discovery", night="2026-08-23")
+    dbm.upsert_observations(conn, "autumn-2026", [audit], seats=4,
+                            role="audit", night="2026-08-23")
+    rows = conn.execute("SELECT observation_role, estimated_family_eur f "
+                        "FROM observations ORDER BY observation_role").fetchall()
+    assert [(r["observation_role"], r["f"]) for r in rows] == [
+        ("audit", 500.0), ("discovery", 400.0)]
+    # ...and rerunning the same role still updates in place, never duplicates
+    dbm.upsert_observations(conn, "autumn-2026", [disc], seats=4,
+                            role="discovery", night="2026-08-23")
+    assert conn.execute("SELECT COUNT(*) c FROM observations").fetchone()["c"] == 2

@@ -44,7 +44,10 @@ def fetch_normals(dest: Destination, log=print) -> dict[str, dict]:
     d = _get_json(f"{ARCHIVE}?{q}")["daily"]
     months: dict[str, dict] = {str(m): {"t": [], "rain": 0} for m in range(1, 13)}
     n_years = 3
-    for dt, t, p in zip(d["time"], d["temperature_2m_max"], d["precipitation_sum"]):
+    # parallel arrays from one Open-Meteo response — a length mismatch is a
+    # malformed payload, not something to silently truncate
+    for dt, t, p in zip(d["time"], d["temperature_2m_max"],
+                        d["precipitation_sum"], strict=True):
         m = str(int(dt[5:7]))
         if t is not None:
             months[m]["t"].append(t)
@@ -60,7 +63,8 @@ def fetch_normals(dest: Destination, log=print) -> dict[str, dict]:
             "timezone": "UTC",
         })
         h = _get_json(f"{MARINE}?{q2}")["hourly"]
-        for dt, s in zip(h["time"], h["sea_surface_temperature"]):
+        for dt, s in zip(h["time"], h["sea_surface_temperature"],
+                         strict=True):
             if s is not None:
                 sea[str(int(dt[5:7]))].append(s)
     except Exception:

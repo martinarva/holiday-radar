@@ -190,7 +190,7 @@ def cmd_dry_run(cfg: Config, args) -> None:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md)
-    print(f"\n=== SUMMARY ===")
+    print("\n=== SUMMARY ===")
     for k, v in summary.items():
         print(f"  {k}: {v}")
     print(f"\nreport written: {out}")
@@ -312,7 +312,8 @@ def cmd_fetch_wizz(cfg: Config, args) -> None:
                     continue
                 keep = obs if args.all_pairs else obs[:1]
                 total += dbm.upsert_observations(conn, h.id, keep, seats,
-                                                 role="discovery")
+                                                 role="discovery",
+                                                 night=today.isoformat())
                 best = obs[0]
                 print(f"    {og.code}-{r['code']}/{h.id}: {len(obs)} pairs, "
                       f"cheapest EUR {best.price_adult_eur:.2f}/adult "
@@ -336,6 +337,7 @@ def cmd_run_scheduler(cfg: Config, args) -> None:
 
 def cmd_serve(cfg: Config, args) -> None:
     import uvicorn
+
     from app.api import create_app
     print(f"dev UI: http://localhost:{args.port}/")
     uvicorn.run(create_app(cfg), host=args.host, port=args.port, log_level="warning")

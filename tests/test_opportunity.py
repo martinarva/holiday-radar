@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app import db as dbm, opportunity as opp
+from app import db as dbm
+from app import opportunity as opp
 from app.config import load_config
 from app.providers.base import Observation
 
@@ -278,3 +279,76 @@ def test_a_priced_destination_shows_even_without_a_watch_row(cfg, tmp_path):
     assert fco is not None, "a priced destination disappeared"
     assert fco["best_option"]["effective_eur"] == 679.92
     assert fco["best_option"]["airlines"] == ["Wizz Air"]
+
+
+def test_one_providers_outage_does_not_blank_a_priced_destination(cfg, tmp_path):
+    """A global "latest night" snapshot hid data that was in the database.
+
+    BCN refreshes tonight, AGP's provider fails, and AGP flipped to
+    "scanning" as though nothing were known — while yesterday's AGP price sat
+    right there. Each watch falls back to its own most recent night, labelled
+    with where the number came from.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 25), date(2026, 11, 1)
+    for dst in ("AGP", "BCN"):
+        o = Observation(origin="TLL", destination=dst, out_date=out,
+                        back_date=back, price_adult_eur=200.0,
+                        source="airbaltic", price_basis="family_quote",
+                        estimated_family_eur=800.0, is_direct=True)
+        dbm.upsert_observations(conn, h.id, [o], seats=4, night="2026-08-22")
+    # tonight only BCN comes back
+    fresh = Observation(origin="TLL", destination="BCN", out_date=out,
+                        back_date=back, price_adult_eur=190.0,
+                        source="airbaltic", price_basis="family_quote",
+                        estimated_family_eur=760.0, is_direct=True)
+    dbm.upsert_observations(conn, h.id, [fresh], seats=4, night="2026-08-23")
+    dbm.write_watch_state(conn, [
+        {"holiday_id": h.id, "origin": "TLL", "destination": d,
+         "status": "eligible", "score": 10.0, "rule": "beach",
+         "dormant": False, "coverage_class": "covered_direct"}
+        for d in ("AGP", "BCN")])
+
+    ops = opp.build(cfg, conn, h, night="2026-08-23", climate_cache={})
+    by_dst = {o["destination"]: o for o in ops}
+    assert by_dst["BCN"]["best_option"]["effective_eur"] == 760.0
+    agp = by_dst["AGP"]["best_option"]
+    assert agp is not None, "yesterday's price must not vanish"
+    assert agp["effective_eur"] == 800.0
+    assert agp["from_night"] == "2026-08-22", "and it must say it is stale"
+    assert by_dst["BCN"]["best_option"]["from_night"] is None
+
+
+def test_a_late_return_charges_the_origins_hotel(cfg, tmp_path):
+    """HEL's rule is a real cost once the clock says the ferry has gone.
+
+    It was computed and displayed as "risk" but never added, so a EUR 400
+    fare from Helsinki reported EUR 620 effective when the honest number was
+    EUR 710.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    hel = cfg.origin("HEL")
+    assert hel.hotel_eur > 0 and hel.hotel_if_arrival_after, "fixture premise"
+    o = Observation(origin="HEL", destination="AGP",
+                    out_date=date(2026, 10, 25), back_date=date(2026, 11, 1),
+                    price_adult_eur=100.0, source="ryanair",
+                    price_basis="quoted_rt", estimated_family_eur=400.0,
+                    is_direct=True,
+                    raw={"times": {"out_departure": "2026-10-25T10:00",
+                                   "out_arrival": "2026-10-25T14:00",
+                                   "in_departure": "2026-11-01T19:00",
+                                   "in_arrival": "2026-11-01T23:55"}})
+    dbm.upsert_observations(conn, h.id, [o], seats=4, night="2026-08-23")
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "HEL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "covered_direct"}])
+    opt = opp.build(cfg, conn, h, night="2026-08-23",
+                    climate_cache={})[0]["best_option"]
+    assert opt["origin_hotel_eur"] == hel.hotel_eur
+    assert opt["effective_eur"] == round(
+        400.0 + hel.logistics_eur(7) + hel.hotel_eur, 2)
+    # once it is a real cost it stops being advertised as a mere risk
+    assert opt["hotel_risk_eur"] is None

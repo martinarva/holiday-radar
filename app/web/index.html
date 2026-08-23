@@ -128,7 +128,14 @@ select{background:var(--raise);color:var(--ink);border:1px solid var(--line);
 // (a plain div would silently drop them).
 const $ = (h) => { const t=document.createElement("template"); t.innerHTML=h.trim(); return t.content.firstChild; };
 const eur = v => v==null ? "–" : "€" + Math.round(v).toLocaleString("en-US");
-const esc = s => String(s??"").replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+/* Escapes for BOTH text and attribute contexts. Quotes matter: airline names
+   and airport codes come from scraped provider HTML, and a value carrying a
+   quote could otherwise close an attribute and add its own. */
+const ESCAPES = {"<":"&lt;", ">":"&gt;", "&":"&amp;", '"':"&quot;", "'":"&#39;",
+                 "`":"&#96;", "=":"&#61;"};
+const esc = s => String(s??"").replace(/[<>&"'`=]/g, c => ESCAPES[c]);
+/* Provider-supplied lists (airlines, legs) are never trusted verbatim. */
+const escList = (v, sep) => (v||[]).map(esc).join(sep);
 const j = async u => { const r = await fetch(u); if(!r.ok) throw new Error(u+" → "+r.status); return r.json(); };
 const ago = h => h==null ? "" : h < 1 ? "just now" : h < 24 ? `${Math.round(h)}h ago`
   : `${Math.round(h/24)}d ago`;
@@ -174,16 +181,25 @@ function verifChip(level){
 }
 function stops(o){ return o.is_direct ? `<span style="color:var(--good)">nonstop</span>`
                                       : `<span style="color:var(--fair)">1+ stop</span>`; }
-const hhmm = s => s ? String(s).slice(11, 16) : null;
+/* Times come from scraped provider payloads, so the slice is validated
+   rather than trusted to be "HH:MM". Anything else is dropped. */
+const hhmm = s => {
+  if(!s) return null;
+  const t = String(s).slice(11, 16);
+  return /^\d{2}:\d{2}$/.test(t) ? t : null;
+};
 function timesLine(o){
   const t = (o && o.times) || {};
   const out = hhmm(t.out_departure), outA = hhmm(t.out_arrival);
   const inD = hhmm(t.in_departure), inA = hhmm(t.in_arrival);
   if(!out && !inD) return `<span class="mut">times not published by ${esc(o.source||"source")}</span>`;
+  const O = esc(o.origin || ""), D = esc(o._destination || o.destination || "");
   const rows = [];
-  if(out) rows.push(`<span class="mut">out</span> <b>${out}</b>${outA?` → <b>${outA}</b>`:""}`);
-  if(inD) rows.push(`<span class="mut">back</span> <b>${inD}</b>${inA?` → <b>${inA}</b>`:""}`);
-  else if(out) rows.push(`<span class="mut">back — return times not listed for a round-trip search</span>`);
+  if(out) rows.push(`<span class="mut">out</span> ${O} <b>${out}</b>${
+    outA?` → ${D} <b>${outA}</b>${dayShift(t.out_departure, t.out_arrival)}`:""}`);
+  if(inD) rows.push(`<span class="mut">back</span> ${D} <b>${inD}</b>${
+    inA?` → ${O} <b>${inA}</b>${dayShift(t.in_departure, t.in_arrival)}`:""}`);
+  else if(out) rows.push(`<span class="mut">back — this source lists outbound legs only</span>`);
   return rows.join(" · ");
 }
 /* A "1 stop" that waits 16 hours in Warsaw is not the trip a "1 stop" label
@@ -231,19 +247,32 @@ function layoverCell(o){
   return `<span style="color:${col}">${hh}h${String(mm).padStart(2,"0")}</span>`
        + (L.overnight ? `<br><span class="mut small">+hotel</span>` : "");
 }
-const timesCell = o => {
+/* Airport codes are not decoration here. A bare "12:35–23:59" was read as
+   "lands home at 23:59, too late for the ferry" when it was the arrival in
+   Orlando — the outbound leg. Every time says where it happens. */
+const dayShift = (from, to) => {
+  if(!from || !to) return "";
+  const d = (new Date(to.slice(0,10)) - new Date(from.slice(0,10))) / 86400000;
+  return d > 0 ? `<sup>+${d}</sup>` : "";
+};
+const timesCell = (o, og, dst) => {
   const t = (o && o.times) || {};
   const a = hhmm(t.out_departure), b = hhmm(t.out_arrival);
   const c = hhmm(t.in_departure), d = hhmm(t.in_arrival);
   if(!a && !c) return `<span class="mut">–</span>`;
-  return `${a?`${a}${b?"–"+b:""}`:"–"}<br><span class="mut">${c?`${c}${d?"–"+d:""}`:"–"}</span>`;
+  const O = esc(og || o.origin || ""), D = esc(dst || "");
+  const out = a ? `${O} ${a}${b?` → ${D} ${b}${dayShift(t.out_departure,t.out_arrival)}`:""}`
+                : "–";
+  const back = c ? `${D} ${c}${d?` → ${O} ${d}${dayShift(t.in_departure,t.in_arrival)}`:""}`
+                 : `<span title="this source lists outbound legs only">not published</span>`;
+  return `${out}<br><span class="mut">${back}</span>`;
 };
 
 /* ---------------- Radar home ---------------- */
 async function viewRadar(el){
   const d = await j("/api/radar");
   setStatus(d);
-  const fam = `Family ${d.family.adults}+${d.family.children} · ${d.origins.join(" + ")}`;
+  const fam = `Family ${d.family.adults}+${d.family.children} · ${escList(d.origins," + ")}`;
   el.innerHTML = "";
   el.append($(`<div><h1>Find our next school-holiday trip</h1>
     <p class="sub">${fam} · snapshot ${d.night ?? "–"}</p></div>`));
@@ -264,15 +293,15 @@ async function viewRadar(el){
             ` — ${eur(b.flights_eur)} flights + ${eur(b.logistics_eur)} logistics` : ""}</div>
         </div>
         <div style="min-width:220px">
-          <div><b>${b.origin} → ${h.destination}</b> · ${stops(b)}</div>
+          <div><b>${esc(b.origin)} → ${esc(h.destination)}</b> · ${stops(b)}</div>
           <div class="mut">${dfmt(b.out_date)} → ${dfmt(b.back_date)} · ${b.nights} nights</div>
-          <div class="mut small">${(b.airlines||[]).join(" + ") || "airline n/a"}</div>
+          <div class="mut small">${escList(b.airlines," + ") || "airline n/a"}</div>
         </div>
       </div>
       <div class="facts">${schoolChip(b)} ${climChip(h.climate)} ${verifChip(b.verification.level)}</div>
       ${vs}
       <div class="row" style="margin-top:14px">
-        <a class="btn" href="#/h/${h.holiday_id}/${h.destination}">View deal</a>
+        <a class="btn" href="#/h/${h.holiday_id}/${esc(h.destination)}">View deal</a>
         <button class="btn ghost" onclick="alert('Tracking arrives with E3 alerts.')">♡ Track this trip</button>
       </div></div>`));
   } else {
@@ -313,7 +342,7 @@ async function viewRadar(el){
         <div class="small"><b>${dfmt(bo.out_date)} → ${dfmt(bo.back_date)}</b>
           <span class="mut">· ${bo.nights} nights</span></div>
         <div class="mut small">${bo.origin} · ${bo.is_direct ? "direct" : "1+ stop"} ·
-          ${(bo.airlines||[]).join(" + ") || "airline n/a"} ·
+          ${escList(bo.airlines," + ") || "airline n/a"} ·
           ${bo.school_days ? "🏫 "+bo.school_days : "✓ 0 school days"}</div>
         ${cheapBlock}`
         : `<div class="empty" style="margin:12px 0">No prices yet — scanning has just started.</div>`}
@@ -448,7 +477,7 @@ async function viewHoliday(el, hid){
         <div class="row">
           <div style="min-width:150px"><span class="mid price">${eur(b.effective_eur)}</span>
             <span class="mut small"> effective</span></div>
-          <div><b>${b.origin}</b> · ${stops(b)} · ${b.nights} nights ·
+          <div><b>${esc(b.origin)}</b> · ${stops(b)} · ${b.nights} nights ·
             <span class="mut">${dfmt(b.out_date)}→${dfmt(b.back_date)}</span></div>
           <div class="small">${schoolChip(b)}</div>
           <div style="margin-left:auto" class="small">${verifChip(b.verification.level)} ${mk}</div>
@@ -494,22 +523,24 @@ async function viewOpportunity(el, hid, dst){
   const g = $(`<div class="grid g2" style="margin-top:16px"></div>`);
   g.append($(`<div class="card">
     <div class="kicker mut small" style="letter-spacing:.08em">RECOMMENDED</div>
-    <div class="mid" style="margin:6px 0">${b.origin} → ${o.destination}</div>
+    <div class="mid" style="margin:6px 0">${esc(b.origin)} → ${o.destination}</div>
     <div class="mut">${dfmt(b.out_date)} → ${dfmt(b.back_date)} · ${b.nights} nights · ${layoverChip(b)}</div>
     <div class="small" style="margin-top:4px">${timesLine(b)}</div>
     <div class="big price" style="margin-top:10px">${eur(b.effective_eur)}</div>
-    <div class="mut small">${b.logistics_eur ? `${eur(b.flights_eur)} flights + ${eur(b.logistics_eur)} ${b.origin} logistics`
+    <div class="mut small">${b.logistics_eur ? `${eur(b.flights_eur)} flights + ${eur(b.logistics_eur)} ${esc(b.origin)} logistics`
       : "no origin logistics"}${b.layover_hotel_eur ? ` + ${eur(b.layover_hotel_eur)} layover hotel` : ""}${
+      b.origin_hotel_eur ? ` + ${eur(b.origin_hotel_eur)} ${esc(b.origin)} hotel night` : ""}${
       b.hotel_risk_eur ? ` · +${eur(b.hotel_risk_eur)} hotel if the flight is early/late` : ""}</div>
-    <div class="facts small">${schoolChip(b)} · ${(b.airlines||[]).join(" + ")||"airline n/a"}</div>
+    ${b.from_night ? `<div class="mut small">carried over from ${esc(b.from_night)} — no fresh quote tonight</div>` : ""}
+    <div class="facts small">${schoolChip(b)} · ${escList(b.airlines," + ")||"airline n/a"}</div>
     <div class="row" style="margin-top:12px">${dealPill(b)} ${scorePill(b.score)}</div>
     <div class="small mut" style="margin-top:8px">Why?<br>${
       (b.reasons||[]).map(r=>(r.good?"✓ ":"△ ")+esc(r.text)).join("<br>")}</div>
     <div class="row" style="margin-top:12px">${verifChip(b.verification.level)}
-      <span class="mut small">source ${b.source} · updated ${ago(b.age_hours)}</span></div>
+      <span class="mut small">source ${esc(b.source)} · updated ${ago(b.age_hours)}</span></div>
     ${b.verify_mode === "carrier-direct" ? `
       <div class="small mut" style="margin-top:8px;border-left:2px solid var(--line);padding-left:10px">
-        This fare comes straight from ${(b.airlines||["the carrier"])[0]}. Google Flights
+        This fare comes straight from ${esc((b.airlines||["the carrier"])[0])}. Google Flights
         does not price Ryanair, so a live check can only show what other airlines cost.</div>
       <div class="row" style="margin-top:12px">
         <button class="btn" onclick="alert('Alternative-market check lands with E3.')">Check alternatives</button>
@@ -550,11 +581,13 @@ async function viewOpportunity(el, hid, dst){
       <td>${rec?'<span class="star">★</span> ':""}<b>${opt.origin}</b></td>
       <td class="n price">${eur(opt.flights_eur)}</td>
       <td class="n price mut">${opt.logistics_eur?"+"+eur(opt.logistics_eur):"—"}</td>
-      <td class="n price"><b>${eur(opt.effective_eur)}</b></td>
+      <td class="n price"><b>${eur(opt.effective_eur)}</b>${
+        opt.origin_hotel_eur ? `<br><span class="mut small">incl. ${eur(opt.origin_hotel_eur)} hotel</span>` : ""}${
+        opt.from_night ? `<br><span class="mut small">from ${esc(opt.from_night)}</span>` : ""}</td>
       <td>${opt.nights}n · ${layoverCell(opt)}</td>
-      <td class="small">${timesCell(opt)}</td>
+      <td class="small">${timesCell(opt, opt.origin, o.destination)}</td>
       <td>${opt.school_days?("🏫 "+opt.school_days):"✓ 0"}</td>
-      <td class="mut">${(opt.airlines||[]).join("+")||"–"}</td>
+      <td class="mut">${escList(opt.airlines,"+")||"–"}</td>
       <td class="mut small">${(opt.reasons||[]).slice(0,2).map(r=>(r.good?"✓ ":"△ ")+esc(r.text)).join("<br>")}</td>
     </tr>`));
   }
@@ -615,7 +648,7 @@ async function viewOpportunity(el, hid, dst){
           const tip = `${eur(p.effective_eur)} effective · ${eur(p.flights_eur)} flights · `
             + `${p.nights} nights · ${p.is_direct?"nonstop":"with a connection"} · `
             + `${p.school_days?p.school_days+" school days":"no school missed"}`
-            + `${(p.airlines||[]).length?" · "+p.airlines.join(" + "):""}`;
+            + `${(p.airlines||[]).length?" · "+escList(p.airlines," + "):""}`;
           return `<td style="color:${col}" title="${esc(tip)}">
             ${eur(p.effective_eur)}${mark(p)}${p.school_days?`<br><span class="mut" style="font-size:11px">🏫${p.school_days}</span>`:""}</td>`;
         }).join("")}</tr>`).join("")}</tbody></table></div>`);
@@ -631,14 +664,14 @@ async function viewOpportunity(el, hid, dst){
     const ob = of.querySelector("tbody");
     d.offers.slice(0,25).forEach((x,i)=>{
       ob.append($(`<tr><td class="n mut">${i+1}</td><td class="n price">${eur(x.price_total_eur)}</td>
-        <td>${esc((x.airlines||[]).join(" + "))||"–"}</td>
-        <td class="mut small">${esc((x.legs||[]).join("  "))}</td>
+        <td>${escList(x.airlines," + ")||"–"}</td>
+        <td class="mut small">${escList(x.legs,"  ")}</td>
         <td class="small">${(x.leg_details||[]).length
           ? x.leg_details.map(l=>`${esc(l.from)}&nbsp;${hhmm(l.departure)||"–"}→${hhmm(l.arrival)||"–"}`).join("<br>")
           : '<span class="mut">–</span>'}</td>
         <td>${offerConnection(x)}</td>
         <td class="mut">${dfmt(x.out_date)}→${dfmt(x.back_date)}</td>
-        <td class="mut small">${x.origin} · ${x.source}</td></tr>`));
+        <td class="mut small">${esc(x.origin)} · ${esc(x.source)}</td></tr>`));
     });
     el.append(of);
   }
@@ -666,9 +699,9 @@ async function viewSystem(el){
       </tbody></table></div>
     <div class="card"><h3>Observations by source</h3>
       <table><tbody>${Object.entries(s.observations_by_source)
-        .map(([k,c])=>`<tr><td>${k}</td><td class="n price">${c}</td></tr>`).join("")}</tbody></table></div>
+        .map(([k,c])=>`<tr><td>${esc(k)}</td><td class="n price">${c}</td></tr>`).join("")}</tbody></table></div>
     <div class="card"><h3>Providers</h3>
-      <table><tbody>${s.providers.map(p=>`<tr><td>${p.name}</td>
+      <table><tbody>${s.providers.map(p=>`<tr><td>${esc(p.name)}</td>
         <td class="mut small">${p.role}</td>
         <td class="n"><span class="pill ${p.state==="healthy"?"good":p.state==="disabled"?"grey":"info"}">${p.state}</span></td></tr>`).join("")}</tbody></table></div>
   </div>`));
@@ -701,7 +734,7 @@ async function viewSystem(el){
         <td class="mut">${dfmt(x.out_date)}→${dfmt(x.back_date)}</td>
         <td class="n price">${eur(x.price_total_eur)}</td>
         <td class="small">${meaning}</td>
-        <td class="mut small">${esc((x.airlines||[]).join("+"))}</td>
+        <td class="mut small">${escList(x.airlines,"+")}</td>
         <td>${verifChip(x.level)}</td></tr>`));
     }
     el.append(t);

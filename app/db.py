@@ -231,6 +231,19 @@ MIGRATIONS: list[tuple[str, str]] = [
 
     ("0032_alerts_status", """
         ALTER TABLE alerts ADD COLUMN status TEXT NOT NULL DEFAULT 'sent'"""),
+
+    ("0033_obs_unique_by_role", """
+        DROP INDEX IF EXISTS ux_obs_watch_pair_night"""),
+    ("0034_obs_unique_by_role2", """
+        CREATE UNIQUE INDEX ux_obs_watch_pair_night ON observations
+        (holiday_id, origin, destination, source, out_date, back_date,
+         observed_night, observation_role)"""),
+    ("0035_offers_unique_by_role", """
+        DROP INDEX IF EXISTS ux_offers_key"""),
+    ("0036_offers_unique_by_role2", """
+        CREATE UNIQUE INDEX ux_offers_key ON offers
+        (holiday_id, origin, destination, out_date, back_date,
+         observed_night, source, offer_rank, observation_role)"""),
 ]
 
 # source -> operating carrier when the source implies it
@@ -301,11 +314,19 @@ def init_db(path: str | Path) -> sqlite3.Connection:
 
 def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
                         obs: list[Observation], seats: int,
-                        role: str = "discovery") -> int:
-    """One row per watch×source×pair×night; reruns update in place."""
+                        role: str = "discovery",
+                        night: str | None = None) -> int:
+    """One row per watch×source×pair×night; reruns update in place.
+
+    `night` is the run's LOCAL date and the caller must pass it. Deriving it
+    from `observed_at` (UTC) split a single run in two: a 02:45 Europe/Tallinn
+    cycle stamps its observations with the previous UTC day, so the scheduler
+    recorded run "2026-08-23" while its own rows landed under "2026-08-22" —
+    and every downstream query keyed on the run's night then saw nothing.
+    """
     n = 0
     for o in obs:
-        night = o.observed_at.date().isoformat()
+        row_night = night or o.observed_at.date().isoformat()
         conn.execute("""
             INSERT INTO observations
               (holiday_id, origin, destination, source, out_date, back_date,
@@ -315,8 +336,12 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
                airlines, out_departure, out_arrival, in_departure, in_arrival,
                max_layover_h, layover_label, layover_overnight)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            -- observation_role is part of the key: an audit re-quote of the
+            -- same pair must sit BESIDE its discovery row, not replace it.
+            -- Without it the audit overwrote the very row it was measuring,
+            -- destroying the carrier-vs-Google delta it exists to produce.
             ON CONFLICT(holiday_id, origin, destination, source,
-                        out_date, back_date, observed_night)
+                        out_date, back_date, observed_night, observation_role)
             DO UPDATE SET
               observed_at=excluded.observed_at,
               price_adult_eur=excluded.price_adult_eur,
@@ -339,7 +364,7 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               layover_overnight=excluded.layover_overnight
         """, (holiday_id, o.origin, o.destination, o.source,
               o.out_date.isoformat(), o.back_date.isoformat(),
-              night, o.observed_at.isoformat(),
+              row_night, o.observed_at.isoformat(),
               o.price_adult_eur, o.price_basis, o.source_price,
               o.family_estimate_eur(seats),
               None if o.is_direct is None else int(o.is_direct),
@@ -356,12 +381,13 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
 
 
 def upsert_offers(conn: sqlite3.Connection, holiday_id: str, offers,
-                  seats: int, role: str = "discovery") -> int:
+                  seats: int, role: str = "discovery",
+                  night: str | None = None) -> int:
     """Store every itinerary a query returned (airline combinations, stop
     counts, prices), ranked cheapest-first. Same per-night upsert semantics
     as observations: a rerun updates the night's rows, it never duplicates."""
     now = datetime.now(UTC)
-    night = now.date().isoformat()
+    night = night or now.date().isoformat()      # caller's LOCAL night wins
     n = 0
     for rank, o in enumerate(sorted(offers, key=lambda x: x.price_total_eur)):
         legs = list(o.legs)
@@ -373,7 +399,7 @@ def upsert_offers(conn: sqlite3.Connection, holiday_id: str, offers,
                stops, is_direct, first_departure, last_arrival, leg_details)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(holiday_id, origin, destination, out_date, back_date,
-                        observed_night, source, offer_rank)
+                        observed_night, source, offer_rank, observation_role)
             DO UPDATE SET
               observed_at=excluded.observed_at,
               observation_role=excluded.observation_role,

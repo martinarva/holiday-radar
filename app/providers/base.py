@@ -35,6 +35,17 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Low-cost carriers Google Flights does not index — measured, not assumed:
+# across 9819 sampled offers there are zero Ryanair, Wizz Air and easyJet
+# rows against 2653 Lufthansa. Their fares reach us only through their own
+# endpoints, which has three consequences everywhere downstream: a Google
+# check beside such a fare is market CONTEXT, never verification; a
+# carrier-vs-Google delta on one measures the rest of the market rather than
+# provider bias; and the watch is covered whether or not Google found
+# anything. Add a source here and every one of those follows automatically.
+ULCC_SOURCES = frozenset({"ryanair", "wizzair"})
+
+
 @dataclass(frozen=True)
 class Observation:
     """One stage-A date-pair candidate for a (origin, destination) watch.

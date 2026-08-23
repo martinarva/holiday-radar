@@ -114,7 +114,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     @app.get("/api/radar")
     def radar():
         """Home payload: health, holiday cards, hero deal, recent movers."""
-        from app import climate as climate_mod, opportunity as opp
+        from app import climate as climate_mod
+        from app import opportunity as opp
         conn = _conn(cfg)
         night = dbm.latest_night(conn)
         cache = climate_mod.load_cache(cfg)
@@ -147,7 +148,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     @app.get("/api/holidays/{holiday_id}/opportunities")
     def opportunities(holiday_id: str):
         """Ranked opportunities (destination-first), NOT watches."""
-        from app import climate as climate_mod, opportunity as opp
+        from app import climate as climate_mod
+        from app import opportunity as opp
         h = cfg.holiday(holiday_id)
         if h is None:
             raise HTTPException(404, f"unknown holiday {holiday_id}")
@@ -162,7 +164,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     def opportunity_detail(holiday_id: str, destination: str):
         """One destination in full: origins, date matrix, price-vs-school,
         history, verification, every stored itinerary."""
-        from app import climate as climate_mod, opportunity as opp
+        from app import climate as climate_mod
+        from app import opportunity as opp
         h = cfg.holiday(holiday_id)
         if h is None:
             raise HTTPException(404, f"unknown holiday {holiday_id}")
@@ -287,6 +290,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                  "state": "healthy" if by_source.get("airbaltic") else "idle"},
                 {"name": "Ryanair", "role": "stage-A carrier",
                  "state": "healthy" if by_source.get("ryanair") else "idle"},
+                {"name": "Wizz Air", "role": "stage-A carrier (TLL only)",
+                 "state": "healthy" if by_source.get("wizzair") else "idle"},
                 {"name": "Google sampler", "role": "stage-A + verify",
                  "state": "healthy" if by_source.get("google_flights") else "idle"},
                 {"name": "SerpApi", "role": "verify backup", "state": "standby"},

@@ -27,6 +27,17 @@ from app.config import Config
 from app.scheduler import run_nightly
 
 SLICE_SECONDS = 20
+# A crashed slot retries on this backoff instead of waiting a whole day (or
+# spinning). Long enough that a persistent fault does not hammer providers.
+RETRY_SECONDS = 1800
+
+
+def _sleep(seconds: float, log, message: str) -> None:
+    """Interruptible sleep — a stop must stay responsive during a backoff."""
+    log(message)
+    while seconds > 0:
+        time.sleep(min(SLICE_SECONDS, seconds))
+        seconds -= SLICE_SECONDS
 
 
 def parse_hm(cron: str) -> tuple[int, int]:
@@ -114,10 +125,26 @@ def run_forever(cfg: Config, db_path, max_runs: int | None = None,
             try:
                 s = run_nightly(cfg, db_path, log=log, **run_kw)
                 log(f"[daemon] done: {s}")
+                performed += 1
             except Exception:
-                log("[daemon] nightly crashed, continuing:\n"
-                    + traceback.format_exc())
-            performed += 1
+                # A crash is not a completed run. It used to count toward
+                # max_runs, clear due_now and leave no record, so the soak
+                # scored a failure as a success and nothing retried until the
+                # next night. Record it, then retry on a short backoff.
+                tb = traceback.format_exc()
+                log("[daemon] nightly crashed:\n" + tb)
+                try:
+                    conn = dbm.init_db(db_path)
+                    dbm.record_run(conn, "nightly-failed",
+                                   datetime.now(timezone.utc).isoformat(),
+                                   {"night": night, "ok": False},
+                                   errors=[tb.strip().splitlines()[-1]])
+                    conn.close()
+                except Exception:
+                    pass          # never let bookkeeping mask the real error
+                _sleep(RETRY_SECONDS, log,
+                       f"[daemon] retrying the nightly in {RETRY_SECONDS // 60} min")
+                continue          # due_now stays True: try again
             due_now = False
             continue
 
@@ -133,8 +160,13 @@ def run_forever(cfg: Config, db_path, max_runs: int | None = None,
                     log("[daemon] alerts: "
                         f"{deliver_alerts(cfg, db_path, night, log=log)}")
                 except Exception:
-                    log("[daemon] alert delivery crashed, continuing:\n"
+                    # Nothing marked the day done, so falling straight back
+                    # into the loop would spin on the failure. Back off first.
+                    log("[daemon] alert delivery crashed:\n"
                         + traceback.format_exc())
+                    _sleep(RETRY_SECONDS, log,
+                           "[daemon] retrying the digest in "
+                           f"{RETRY_SECONDS // 60} min")
                 continue
 
         target, which = next_slot(now, (hour, minute), (a_hour, a_minute))

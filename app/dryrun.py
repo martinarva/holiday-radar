@@ -27,7 +27,6 @@ from app.providers import ProviderError, airbaltic, ryanair, wizzair
 from app.providers.base import Observation
 from app.watchlist import derive, holiday_mid_month
 
-
 SALES_HORIZON_DAYS = 330    # carriers price ~11 months out; beyond that a
                             # watch is DORMANT (zero budget, wakes on entry)
 
@@ -226,7 +225,8 @@ def run(cfg: Config, log=print, sleep_s: float = 0.12,
     summary["airbaltic_calls_per_night"] = d["n_calls"]
 
     if db_path:
-        _persist(cfg, db_path, relevant, summary, d["started_at"], d["errors"])
+        _persist(cfg, db_path, relevant, summary, d["started_at"], d["errors"],
+                 night=d["today"].isoformat())   # LOCAL night, never UTC
         log(f"persisted to {db_path} ({len(d['errors'])} provider errors logged)")
 
     md = _report_md(cfg, summary, hols, relevant, blind, best, today)
@@ -240,7 +240,8 @@ def compute_metrics(cfg: Config, hols: dict[str, Holiday],
     the DB-based recompute (E2-A), so coverage semantics cannot drift between
     the two paths."""
     seats = cfg.passengers.seats
-    by = lambda pred: [r for r in relevant if pred(r)]
+    def by(pred):
+        return [r for r in relevant if pred(r)]
     eligible = by(lambda r: r.status == climate.ELIGIBLE)
     marginal = by(lambda r: r.status == climate.MARGINAL)
     covered_direct = by(lambda r: r.coverage_class == "covered_direct")
@@ -249,17 +250,21 @@ def compute_metrics(cfg: Config, hols: dict[str, Holiday],
     dormant = by(lambda r: r.coverage_class == "dormant")
     bt_cov = by(lambda r: bool(r.bt_candidates))
     ry_cov = by(lambda r: r.ry_pair is not None)
+    wz_cov = by(lambda r: r.wz_pair is not None)
     overlap = by(lambda r: bool(r.bt_candidates) and r.ry_pair is not None)
 
     def zsd(r: WatchRow) -> bool:
+        """Any priced pair costing no school days — from ANY carrier.
+
+        Wizz used to be skipped here, so a watch it covered with a clean
+        zero-school pair was reported as not having one.
+        """
         h = hols[r.holiday_id]
-        for o in r.bt_candidates:
-            if h.school_days_needed(o.out_date, o.back_date,
-                                    cfg.public_holidays) == 0:
-                return True
-        rp = r.ry_pair
-        return bool(rp and h.school_days_needed(rp.out_date, rp.back_date,
-                                                cfg.public_holidays) == 0)
+        cands = (list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
+                 + ([r.wz_pair] if r.wz_pair else []))
+        return any(h.school_days_needed(o.out_date, o.back_date,
+                                        cfg.public_holidays) == 0
+                   for o in cands)
 
     covered = covered_direct + covered_1stop
     zsd_covered = [r for r in covered if zsd(r)]
@@ -279,6 +284,7 @@ def compute_metrics(cfg: Config, hols: dict[str, Holiday],
         "excluded": theoretical - len(relevant),
         "dormant_not_on_sale": len(dormant),
         "airbaltic_covered": len(bt_cov), "ryanair_covered": len(ry_cov),
+        "wizzair_covered": len(wz_cov),
         "overlap": len(overlap),
         "covered_direct": len(covered_direct),
         "covered_1stop": len(covered_1stop),
@@ -291,7 +297,8 @@ def compute_metrics(cfg: Config, hols: dict[str, Holiday],
 
 def _persist(cfg: Config, db_path, relevant: list[WatchRow],
              summary: dict, started_at: str,
-             errors: list[str] | None = None) -> None:
+             errors: list[str] | None = None,
+             night: str | None = None) -> None:
     from app import db as dbm
     conn = dbm.init_db(db_path)
     seats = cfg.passengers.seats
@@ -299,7 +306,7 @@ def _persist(cfg: Config, db_path, relevant: list[WatchRow],
         obs = (list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
                + ([r.wz_pair] if r.wz_pair else []))
         if obs:
-            dbm.upsert_observations(conn, r.holiday_id, obs, seats)
+            dbm.upsert_observations(conn, r.holiday_id, obs, seats, night=night)
     dbm.write_watch_state(conn, [{
         "holiday_id": r.holiday_id, "origin": r.origin,
         "destination": r.destination, "status": r.status, "score": r.score,
@@ -315,6 +322,7 @@ def rows_from_db(cfg: Config, conn, night: str | None = None
     """Rebuild WatchRows from watch_state + one night's observations, so the
     exact same compute_metrics() runs without any network."""
     from datetime import datetime
+
     from app import db as dbm
     night = night or dbm.latest_night(conn)
     rows: dict[tuple[str, str, str], WatchRow] = {}
@@ -344,9 +352,14 @@ def rows_from_db(cfg: Config, conn, night: str | None = None
                 estimated_family_eur=o["estimated_family_eur"],
                 is_direct=None if o["is_direct"] is None else bool(o["is_direct"]),
             )
+            # Rebuild into the same slot the live path uses, or a Wizz row
+            # would come back as an airBaltic candidate.
             if obs.source == "ryanair":
                 if r.ry_pair is None or obs.price_adult_eur < r.ry_pair.price_adult_eur:
                     r.ry_pair = obs
+            elif obs.source == "wizzair":
+                if r.wz_pair is None or obs.price_adult_eur < r.wz_pair.price_adult_eur:
+                    r.wz_pair = obs
             else:
                 r.bt_candidates.append(obs)
     for r in rows.values():
@@ -410,11 +423,15 @@ def _report_md(cfg, s, hols, relevant, blind, best, today) -> str:
         "| Holiday | Relevant | Direct | 1-stop | Blind | Dormant |",
         "|---|---|---|---|---|---|",
     ]
+    def count(rs, k):
+        return sum(1 for r in rs if r.coverage_class == k)
+
     for hid in hols:
         rs = [r for r in relevant if r.holiday_id == hid]
-        c = lambda k: sum(1 for r in rs if r.coverage_class == k)
-        lines.append(f"| {hid} | {len(rs)} | {c('covered_direct')} | "
-                     f"{c('covered_1stop')} | {c('blind')} | {c('dormant')} |")
+        lines.append(
+            f"| {hid} | {len(rs)} | {count(rs, 'covered_direct')} | "
+            f"{count(rs, 'covered_1stop')} | {count(rs, 'blind')} | "
+            f"{count(rs, 'dormant')} |")
     lines += [
         "",
         "## Blind & active watches (the Google sampler's actual job)",

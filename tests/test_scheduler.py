@@ -11,7 +11,11 @@ from app.config import load_config
 from app.dryrun import WatchRow
 from app.providers.base import Observation, ProviderError, VerifiedOffer
 from app.scheduler import (
-    FLOOR_NIGHTS, PAIR_CLASSES, classify_pairs, pick_pair, priority,
+    FLOOR_NIGHTS,
+    PAIR_CLASSES,
+    classify_pairs,
+    pick_pair,
+    priority,
     run_nightly,
 )
 
@@ -303,7 +307,7 @@ def test_pairs_per_watch_multiplies_queries_and_advances_rotation(cfg, tmp_path)
     assert s["pairs_per_watch"] == 3
     # the three queries for one watch hit three distinct date pairs
     per_watch = {}
-    for og, dst, o, b in g.calls:
+    for _og, dst, o, b in g.calls:
         per_watch.setdefault(dst, set()).add((o, b))
     assert all(len(v) == 3 for v in per_watch.values())
     conn = dbm.init_db(dbfile)
@@ -320,3 +324,29 @@ def test_budget_still_caps_multi_pair_sampling(cfg, tmp_path):
                     google_search=g, sleep_s=0, log=lambda *_: None,
                     rng=random.Random(9))
     assert s["discovery_used"] == 7 and len(g.calls) == 7
+
+
+def test_a_wizz_only_watch_does_not_crash_the_audit():
+    """Wizz makes a watch covered_direct, so it must also be able to supply
+    the audit candidate — min() on an empty list once killed a whole night."""
+
+    from app.dryrun import WatchRow
+    from app.providers.base import Observation
+
+    r = WatchRow(holiday_id="autumn-2026", origin="TLL", destination="FCO")
+    r.wz_pair = Observation(origin="TLL", destination="FCO",
+                            out_date=date(2026, 10, 28), back_date=date(2026, 11, 4),
+                            price_adult_eur=169.98, source="wizzair",
+                            is_direct=True)
+    assert r.coverage_class == "covered_direct"
+    cands = (list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
+             + ([r.wz_pair] if r.wz_pair else []))
+    assert cands, "a covered watch must always offer an audit candidate"
+    assert min(cands, key=lambda x: x.price_adult_eur).source == "wizzair"
+
+
+def test_google_cannot_verify_any_ulcc_not_just_ryanair():
+    from app.providers.base import ULCC_SOURCES
+    assert {"ryanair", "wizzair"} <= ULCC_SOURCES
+    assert "airbaltic" not in ULCC_SOURCES
+    assert "google_flights" not in ULCC_SOURCES

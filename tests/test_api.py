@@ -79,7 +79,8 @@ def test_ladder_and_grid_use_the_same_effective_cost_as_the_headline(tmp_path):
     """
     from datetime import date
 
-    from app import db as dbm, opportunity as opp
+    from app import db as dbm
+    from app import opportunity as opp
     from app.providers.base import Observation
 
     cfg = load_config(ROOT / "config.yaml")
@@ -103,3 +104,31 @@ def test_ladder_and_grid_use_the_same_effective_cost_as_the_headline(tmp_path):
     assert opp.layover_hotel_eur(cfg, 0) == 0.0
     assert opp.effective_cost(cfg, 687.0, 0, 1) == 797.0
     assert opp.effective_cost(cfg, 687.0, 0, None) == 687.0
+
+
+def test_no_untrusted_field_is_interpolated_without_escaping():
+    """Provider payloads reach the DOM through innerHTML templates.
+
+    Airline names, airport codes, leg strings and source ids all come from
+    scraped HTML, so every one of them must pass through esc()/escList().
+    esc() escapes quotes and backticks too — a value that merely avoided
+    angle brackets could otherwise close an attribute and open its own.
+    """
+    import re
+
+    html = (ROOT / "app" / "web" / "index.html").read_text()
+    untrusted = ("airlines", "leg_details", "legs", "source", "layover_label")
+    offenders = []
+    for m in re.finditer(r"\$\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}", html):
+        expr = m.group(1)
+        if not any(f in expr for f in untrusted):
+            continue
+        if "esc(" in expr or "escList(" in expr or "hhmm(" in expr:
+            continue
+        offenders.append((html[:m.start()].count("\n") + 1, expr.strip()[:80]))
+    assert not offenders, f"unescaped provider data: {offenders}"
+
+    # and the escaper itself must cover attribute-breaking characters
+    esc_line = next(ln for ln in html.splitlines() if "const ESCAPES" in ln)
+    for ch in ('"', "'"):
+        assert ch in esc_line, f"esc() must handle {ch!r}"

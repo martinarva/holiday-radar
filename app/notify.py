@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.config import Config
 from app.opportunity import deal_label
@@ -36,7 +36,8 @@ from app.opportunity import deal_label
 WEBHOOK_ENV = "HA_WEBHOOK_URL"
 KIND_BUY, KIND_LOW, KIND_BEST = "buy", "new_low", "new_best"
 KIND_DIGEST = "digest"
-PENDING, SENT, BASELINE = "pending", "sent", "baseline"
+PENDING, SENT, BASELINE, EXPIRED = ("pending", "sent", "baseline",
+                                   "expired")
 
 
 class NotifyError(RuntimeError):
@@ -98,7 +99,10 @@ def describe(cfg: Config, holiday, item: dict, opt: dict) -> dict:
     return {
         "holiday_id": holiday.id, "holiday": holiday.name,
         "destination": item["destination"],
-        "destination_name": item.get("name") or item["destination"],
+        # the opportunity payload uses destination_name; item["name"] never
+        # existed, so every alert was titled "AGP" instead of "Malaga"
+        "destination_name": (item.get("destination_name") or item.get("name")
+                             or item["destination"]),
         "origin": opt["origin"],
         "effective_eur": opt["effective_eur"],
         "flights_eur": opt.get("flights_eur"),
@@ -143,6 +147,13 @@ def _last_alert(conn, kind: str, holiday_id: str, destination: str):
 
 def _all_time_low(conn, holiday_id: str, destination: str,
                   before_night: str) -> float | None:
+    """Cheapest family FARE ever recorded for this holiday × destination.
+
+    Compared against `flights_eur`, never the effective cost: the stored
+    series is bare fares, so measuring today's fare-plus-logistics against
+    yesterday's fare would both miss real drops and invent imaginary ones
+    whenever the winning origin changed.
+    """
     r = conn.execute(
         """SELECT MIN(estimated_family_eur) lo FROM observations
            WHERE holiday_id=? AND destination=? AND observed_night < ?
@@ -200,18 +211,19 @@ def candidates(cfg: Config, conn, holiday, items: list[dict], night: str,
                             "previous_eur": prev["effective_eur"] if prev else None})
                 continue        # one alert per destination per run
 
-        # 2) cheaper than anything on record
+        # 2) cheaper than anything on record — fare vs fare (see _all_time_low)
+        #
+        # The record itself is the only baseline needed: the series already
+        # contains every night we have alerted on, so it moves down with us.
+        # Consulting the last alert as well only reintroduced the unit
+        # mismatch, since alerts store the effective cost.
+        fare = d.get("flights_eur")
         low = _all_time_low(conn, holiday.id, item["destination"], night)
-        if low is not None and eff < low:
-            prev = _last_alert(conn, KIND_LOW, holiday.id, item["destination"])
-            # Compare against the record being broken, not merely against the
-            # last thing we announced: with no prior low alert the baseline is
-            # the old low itself, so shaving EUR 10 off it stays quiet.
-            against = prev["effective_eur"] if prev else low
-            if _improved_enough(cfg, eff, against):
-                out.append({"kind": KIND_LOW, **d,
-                            "title": _headline(KIND_LOW, d),
-                            "previous_eur": round(low, 2)})
+        if (low is not None and fare is not None and fare < low
+                and _improved_enough(cfg, fare, low)):
+            out.append({"kind": KIND_LOW, **d,
+                        "title": _headline(KIND_LOW, d),
+                        "previous_eur": round(low, 2)})
 
     # 3) the holiday's top pick changed — but never as a second buzz about a
     # destination this run already announced ("AGP EUR 350 is a good deal"
@@ -288,6 +300,38 @@ def queue(cfg: Config, conn, holiday, items: list[dict], night: str,
     return queued
 
 
+def expire_stale(conn, night: str, cfg: Config | None = None,
+                 log=print) -> int:
+    """Drop queued alerts older than the freshest night we hold.
+
+    An alert held back by the per-push cap used to sit `pending` forever while
+    dedupe blocked any newer one for the same destination — so the digest
+    could eventually announce a price that no longer existed. A queued alert
+    is only worth sending while it still describes tonight's data.
+    """
+    keep = int(((cfg.preferences or {}).get("alerts") or {}).get(
+        "queue_keeps_nights", 1)) if cfg else 1
+    rows = conn.execute(
+        """SELECT id, observed_night FROM alerts WHERE status=?""",
+        (PENDING,)).fetchall()
+    stale = [r["id"] for r in rows
+             if _nights_between(r["observed_night"], night) >= keep + 1]
+    if stale:
+        conn.executemany("UPDATE alerts SET status=? WHERE id=?",
+                         [(EXPIRED, i) for i in stale])
+        conn.commit()
+        log(f"alerts: {len(stale)} queued item(s) expired, their prices are "
+            f"older than {night}")
+    return len(stale)
+
+
+def _nights_between(a: str | None, b: str | None) -> int:
+    try:
+        return abs((date.fromisoformat(b) - date.fromisoformat(a)).days)
+    except (TypeError, ValueError):
+        return 0
+
+
 def pending(conn, limit: int | None = None) -> list[dict]:
     """Queued alerts, best deal first so the digest leads with the best news."""
     rows = conn.execute(
@@ -334,6 +378,10 @@ def deliver(cfg: Config, conn, url: str | None = None, log=print,
     if not url:
         return None
     limit = int(_prefs(cfg).get("max_per_run", 5))
+    latest = conn.execute(
+        "SELECT MAX(observed_night) n FROM observations").fetchone()
+    if latest and latest["n"]:
+        expire_stale(conn, latest["n"], cfg, log=log)
     queued = pending(conn)
     if not queued:
         return None

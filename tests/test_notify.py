@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from app import db as dbm, notify, opportunity as opp
+from app import db as dbm
+from app import notify
+from app import opportunity as opp
 from app.config import load_config
 from app.providers.base import Observation
 
@@ -66,7 +68,10 @@ def test_a_deal_under_the_buy_threshold_is_announced(cfg, tmp_path):
     assert payload["destination"] == "AGP"
     assert payload["effective_eur"] == 350.0
     assert payload["deal"] in ("good", "exceptional")
-    assert "AGP" in payload["title"] or "Malaga" in payload["title"]
+    # the destination's real name, not its IATA code: the payload key is
+    # destination_name, and reading item["name"] titled every alert "AGP"
+    assert payload["destination_name"] == "Málaga"
+    assert payload["title"].startswith("Málaga €350")
     # the payload must carry enough to act on without opening the app
     for k in ("out_date", "back_date", "nights", "origin", "airlines",
               "school_days", "detail", "confidence"):
@@ -254,7 +259,7 @@ def test_a_single_find_keeps_its_own_headline(cfg, tmp_path):
     payload = notify.deliver(cfg, conn, url="http://ha/hook", poster=Spy(),
                              log=lambda *_: None)
     assert payload["count"] == 1
-    assert payload["title"].startswith("Malaga") or "AGP" in payload["title"]
+    assert payload["title"].startswith("Málaga")
 
 
 def test_a_failed_digest_keeps_the_queue_for_the_next_morning(cfg, tmp_path):
@@ -311,3 +316,61 @@ def test_waking_for_the_digest_does_not_arm_the_repricing_run():
 
     at, which = next_slot(datetime(2026, 8, 23, 8, 0), nightly, alerts)
     assert which == "nightly" and at.day == 24      # past both -> tomorrow
+
+
+def test_the_new_low_rule_compares_fares_not_mixed_measures(cfg, tmp_path):
+    """The stored series is bare fares; the alert must be judged against it.
+
+    Measuring today's fare-plus-logistics against yesterday's bare fare
+    invented drops whenever the winning origin changed and hid real ones
+    behind a EUR 147 RIX handicap.
+    """
+    conn = dbm.init_db(tmp_path / "n.db")
+    h = cfg.holiday("autumn-2026")
+    # a steady TLL fare, then RIX undercuts it on the fare but not after
+    # its EUR 147 of logistics
+    for night, price in (("2026-08-21", 900.0), ("2026-08-22", 900.0)):
+        _seed(conn, cfg, "AGP", price, night)
+    spy = Spy()
+    _seed(conn, cfg, "AGP", 880.0, "2026-08-23", origin="RIX")   # -20 only
+    notify.send(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"), "2026-08-23",
+                url="http://ha/hook", poster=spy, log=lambda *_: None)
+    lows = [c for _, c in spy.calls if c["kind"] == notify.KIND_LOW]
+    assert lows == [], "EUR 20 off the fare is under the floor, wherever it flies"
+
+    _seed(conn, cfg, "AGP", 700.0, "2026-08-24", origin="RIX")   # a real drop
+    spy2 = Spy()
+    notify.send(cfg, conn, h, _items(cfg, conn, h, "2026-08-24"), "2026-08-24",
+                url="http://ha/hook", poster=spy2, log=lambda *_: None,
+                now=NOW + timedelta(days=1))
+    lows = [c for _, c in spy2.calls if c["kind"] == notify.KIND_LOW]
+    assert len(lows) == 1
+    assert lows[0]["previous_eur"] == 880.0        # the fare it beat
+    assert lows[0]["flights_eur"] == 700.0
+
+
+def test_a_queued_alert_expires_rather_than_announcing_a_dead_price(cfg, tmp_path):
+    """The per-push cap must not turn into an indefinite hold.
+
+    Overflow used to sit `pending` forever while dedupe blocked any newer
+    alert for the same destination, so the digest could eventually announce a
+    price from weeks ago.
+    """
+    conn = dbm.init_db(tmp_path / "n.db")
+    h = cfg.holiday("autumn-2026")
+    for dst in ("AGP", "BCN", "ALC", "PMI", "IBZ", "TIA", "MLA"):
+        _seed(conn, cfg, dst, 300.0, "2026-08-23")
+    assert notify.queue(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"),
+                        "2026-08-23", log=lambda *_: None) == 7
+    spy = Spy()
+    notify.deliver(cfg, conn, url="http://ha/hook", poster=spy,
+                   log=lambda *_: None)
+    assert len(notify.pending(conn)) == 2, "the cap holds two back"
+
+    # a later night arrives; the held-back pair is now describing old prices
+    _seed(conn, cfg, "AGP", 300.0, "2026-08-30")
+    dropped = notify.expire_stale(conn, "2026-08-30", cfg, log=lambda *_: None)
+    assert dropped == 2
+    assert notify.pending(conn) == []
+    assert conn.execute("SELECT COUNT(*) c FROM alerts WHERE status='expired'"
+                        ).fetchone()["c"] == 2

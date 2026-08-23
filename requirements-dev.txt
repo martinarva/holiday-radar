@@ -1,0 +1,5 @@
+# Test and lint only — deliberately NOT installed into the production image.
+-r requirements.txt
+pytest==9.1.1
+httpx==0.28.1           # FastAPI TestClient
+ruff==0.14.6

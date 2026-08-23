@@ -56,7 +56,7 @@ class Connection:
 
     @property
     def longest(self) -> Layover | None:
-        return max(self.layovers, key=lambda l: l.hours, default=None)
+        return max(self.layovers, key=lambda x: x.hours, default=None)
 
     @property
     def max_hours(self) -> float | None:
@@ -65,7 +65,7 @@ class Connection:
 
     @property
     def total_hours(self) -> float:
-        return sum(l.hours for l in self.layovers)
+        return sum(x.hours for x in self.layovers)
 
     @property
     def needs_hotel(self) -> bool:
@@ -75,8 +75,13 @@ class Connection:
         hours spanning 02:00 with a 5- and a 10-year-old is a hotel — and so
         is a sixteen-hour wait that happens to fall between two dawns.
         """
-        return any((l.overnight and l.hours >= HOTEL_FROM_H)
-                   or l.hours >= LONG_STAY_H for l in self.layovers)
+        return any((x.overnight and x.hours >= HOTEL_FROM_H)
+                   or x.hours >= LONG_STAY_H for x in self.layovers)
+
+    @property
+    def certain(self) -> bool:
+        """True when every gap between legs was readable."""
+        return not self.unparsed
 
     def label(self) -> str | None:
         """Short human summary, e.g. "15h25 in WAW (overnight)"."""
@@ -114,7 +119,7 @@ def connection_of(leg_details: list[dict] | tuple[dict, ...] | None) -> Connecti
     if len(legs) < 2:
         return Connection()
     layovers, bad = [], False
-    for prev, nxt in zip(legs, legs[1:]):
+    for prev, nxt in zip(legs, legs[1:], strict=False):   # pairwise, by design
         arrive, depart = _parse(prev.get("arrival")), _parse(nxt.get("departure"))
         if arrive is None or depart is None:
             bad = True
@@ -125,7 +130,11 @@ def connection_of(leg_details: list[dict] | tuple[dict, ...] | None) -> Connecti
             continue
         layovers.append(Layover(airport=prev.get("to") or "?", hours=round(hours, 2),
                                 start=arrive, end=depart))
-    return Connection(layovers=tuple(layovers), unparsed=bad and not layovers)
+    # ANY unreadable gap makes the whole connection uncertain. Flagging only
+    # the all-or-nothing case scored a three-leg trip whose first wait is 2 h
+    # and whose second is unknown as a comfortable 9.0 — when the unknown one
+    # could be the overnight.
+    return Connection(layovers=tuple(layovers), unparsed=bad)
 
 
 def score_for_hours(hours: float | None) -> float:
@@ -144,9 +153,12 @@ def layover_score(conn: Connection) -> float:
     connection time: a couple of hours is genuinely fine, four is bearable,
     and past that it degrades fast because the day is gone either way.
     """
-    if conn.unparsed:
-        return 6.0                       # unknown — neither rewarded nor punished
     worst = conn.max_hours
+    if conn.unparsed:
+        # A gap we could not read might be the bad one, so a partially known
+        # connection can never score better than "unknown".
+        return min(6.0, layover_score(Connection(layovers=conn.layovers))
+                   if worst is not None else 6.0)
     if worst is None:
         return 10.0                      # nonstop
     if worst < 0.75:
@@ -174,5 +186,5 @@ def summarize(leg_details, hotel_eur: float = 0.0) -> dict:
         "layover_label": conn.label(),
         "layover_score": round(layover_score(conn), 2),
         "layover_hotel_eur": hotel_cost(conn, hotel_eur),
-        "airports": [l.airport for l in conn.layovers],
+        "airports": [x.airport for x in conn.layovers],
     }
