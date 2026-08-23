@@ -5,6 +5,11 @@ provides materially cheaper discovery than Google sampling for the same
 watches.** Adapters get built in ROI order (watch coverage ÷ implementation
 cost). This file is the living scorecard; update it as probes land.
 
+Verdict semantics: **NOT ADMITTED ≠ bad source.** It means the source does
+not pass the *current* economics gate. Revisit triggers: Google sampling
+becoming expensive/unreliable, or a coverage gap turning strategic (e.g.
+HEL→Canaries would make Norwegian rational again).
+
 Scoring columns: calendar UI on their site · machine endpoint behind it
 (JSON/GraphQL) · one query covers a date window · RT pricing · 2+2 pax mix ·
 ≤1-stop filter · works without a browser session · bot protection · estimated
@@ -13,10 +18,10 @@ watch coverage (of our origins × 43-destination pool).
 | Carrier | Relevant origins | Endpoint status | Window query | No-browser | Bot protection | Est. coverage | Verdict |
 |---|---|---|---|---|---|---|---|
 | **Ryanair** | TLL 6 · HEL 10 · RIX 21 routes | ✅ `farfnd/v4/roundTripFares` proven live | ✅ whole window, RT, one request | ✅ | none seen (UA header enough) | high (LCC leisure) | **ADMITTED — adapter shipped** (TODO: duration filter) |
-| Wizz Air | TLL only — **exited RIX**, HEL absent | fare-finder UI exists (Anywhere/Anytime) but fares fetch is worker-tunneled + PerimeterX; legacy timetable API gone (404) | UI yes, machine no | ❌ | PerimeterX | **1/43 pool dests** (TLL→FCO); TLL = 9 city routes | **REJECTED — sampler covers** |
+| Wizz Air | TLL only — **exited RIX**, HEL absent | fare-finder UI exists (Anywhere/Anytime) but fares fetch is worker-tunneled + PerimeterX; legacy timetable API gone (404) | UI yes, machine no | ❌ | PerimeterX | **1/43 pool dests** (TLL→FCO); TLL = 9 city routes | **NOT ADMITTED — sampler covers** |
 | **airBaltic** | TLL/RIX/HEL — RIX hub | ✅ `GET /api/fsf/outbound|inbound|overall` + `/api/orig-dest/en` (network map) | ✅ arbitrary date range, per-day price + `isDirect`, BOTH directions | ✅ plain curl + UA | none seen | **26/43 pool dests × 3 origins ≈ 312/516 watches (60%); RIX: all 26 DIRECT** | **ADMITTED — best source found** (per-leg adult prices; RT = out+in; pairing semantics to confirm in adapter) |
-| Norwegian | HEL (Canaries/Med) | ✅ endpoint FOUND: `GET /api/fare-calendar/calendar?originAirportCode=..&destinationAirportCode=..&outboundDate=..&tripType=2&currencyCode=EUR` — per-day out+in, `transitCount` (0=direct), soldOut | ✅ month per call, both directions | ❌ **Cloudflare wall** for any non-browser client | Cloudflare JSD | ~6-10 HEL watches | **REJECTED — fragile browser state**; revisit if HEL-Canaries becomes a gap |
-| Finnair | HEL long-haul & winter sun | calendar UI excellent (RT month minimums, TLL→TFS Nov–Mar €337/adult) but transport = **Akamai Bot Manager** obfuscated tunnels — nothing readable to replay | UI yes, machine no | ❌ | Akamai (heavy) | high — but Google indexes AY fares fine | **REJECTED — the network-carrier case the gate predicted** |
+| Norwegian | HEL (Canaries/Med) | ✅ endpoint FOUND: `GET /api/fare-calendar/calendar?originAirportCode=..&destinationAirportCode=..&outboundDate=..&tripType=2&currencyCode=EUR` — per-day out+in, `transitCount` (0=direct), soldOut | ✅ month per call, both directions | ❌ **Cloudflare wall** for any non-browser client | Cloudflare JSD | ~6-10 HEL watches | **NOT ADMITTED — fragile browser state**; revisit if HEL-Canaries becomes a gap |
+| Finnair | HEL long-haul & winter sun | calendar UI excellent (RT month minimums, TLL→TFS Nov–Mar €337/adult) but transport = **Akamai Bot Manager** obfuscated tunnels — nothing readable to replay | UI yes, machine no | ❌ | Akamai (heavy) | high — but Google indexes AY fares fine | **NOT ADMITTED — the network-carrier case the gate predicted** |
 | LOT | TLL/RIX→WAW connections | quick probe: HTML shell only | — | ❌ | TBD | medium (connector) | sampler |
 | Eurowings | HEL | quick probe: 308 redirect wall | — | ❌ | TBD | low-medium | sampler |
 | SAS | TLL/HEL/RIX→ARN/CPH | quick probe: 404/timeout | — | ❌ | TBD | medium (connector) | sampler |

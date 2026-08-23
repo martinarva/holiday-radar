@@ -211,12 +211,17 @@ Checked 2026-08-23:
   destination, PerimeterX), Norwegian (perfect endpoint behind a Cloudflare
   wall), Finnair (Akamai-obfuscated transport) and all connectors failed the
   gate and route to the sampler.
-- **Google Flights polite sampling** (fast-flights) for watches the carriers
-  don't cover: 2–3 rotating date pairs per watch per week — the full window
-  gets swept over days while nightly volume stays low. The sampler is
-  **coverage-aware from day one**: a watch with a fresh carrier signal needs
-  less Google; a completely blind watch gets priority from the sampling
-  budget — the same request volume, spent smarter.
+- **Google Flights sampling** (fast-flights) for watches the carriers don't
+  cover — **budget-based, not cadence-based** (review 2026-08-23): a nightly
+  budget (default `google_budget = 30 searches/night`) is allocated by a
+  per-watch priority score
+  `blindness × staleness × holiday_proximity × climate_score × exploration_weight`.
+  A watch with a fresh airBaltic/Ryanair signal scores ~0; a completely
+  blind HEL→TFS gets 2–3 searches; an autumn-2027 watch 14 months out is
+  sampled rarely while autumn-2026 at 64 days out gets most of the budget.
+  Within a watch, date pairs are NOT swept round-robin — sampling order:
+  (1) zero-school-day pairs, (2) 7–9-night pairs, (3) representatives of
+  weekend/weekday combinations, (4) edge pairs last.
 - **Travelpayouts** — strictly **optional** and default-off after E0.1 (0/8
   discovery-hint value): with no token, or with TP gone entirely, the radar
   runs identically.
@@ -259,6 +264,16 @@ Checked 2026-08-23:
   a 60-day median has cold-start and seasonality problems (Christmas fares 450
   days out and 70 days out are different populations); the horizon-bucketed
   baseline is the eventual fix, and v1 just has to not lose the data.
+- **`buy_threshold` and `market_score` are separate concepts in the data
+  model** (review 2026-08-23): `buy_threshold` = the human's absolute
+  "at this price I'd buy" line (the §4D table — deliberately promo-level;
+  first market measurements confirm €400 short-haul family RT is a promo
+  price, which is exactly what the radar hunts); `market_score` = how
+  exceptional a price is against collected history (0–10). Alert routing:
+  buy_threshold breaches push immediately; high market_score alone goes to
+  the Sunday digest ("RIX→AGP €612 family · 18% below baseline · market
+  score 8.7 · buy threshold €400 — not reached"). Don't raise the
+  thresholds to match the market — that would invert the product.
 - **Verification levels** instead of a boolean:
   `indicative` (stage-A cache) → `flight-verified` (stage B confirmed the
   itinerary price) → `bookable-verified` (v2: bags, seats-together, checkout
@@ -394,18 +409,30 @@ The human decides ("€300 cheaper, but 9 h of extra logistics with two kids?").
   hint layer. **Final: TP adapter stays in the repo as strictly optional and
   default-off. The C call is closed with the discovery question answered,
   not skipped.**
-- **E1 — foundation:** opens with a **carrier recon, not adapter-building**:
-  survey every carrier flying TLL/HEL/RIX toward the pool (Wizz Air heads the
-  first batch — LCC calendars are the likeliest wins), score on the §4C
-  criteria, rank by ROI (watch coverage ÷ implementation cost), and admit a
-  source only past the gate: *materially cheaper discovery than Google
-  sampling*. For each admitted source the mini-gate still applies —
-  `endpoint exists → window query → sane prices → parser test → adapter in`;
-  failures route to the sampler. We do not place another TP-style
-  architectural bet on an unproven source. Then: config model, holiday
-  presets 2026–2030, destination pool (~40–70), Open-Meteo normals,
-  watchlist derivation + a preview ("what I would watch and why" — climate
-  justification per row).
+- **E1 — foundation.** The carrier recon is DONE (outcome in §4C; scorecard
+  in docs/carrier-recon.md; no further carrier recons planned). Remaining E1
+  order (review 2026-08-23):
+  - **E1-A — airBaltic pairing spike** (blocks the adapter): lock the
+    out/in semantics with a deterministic test — one route, 3 differently
+    priced outbound days, identical inbound window per outbound, diff the
+    full inbound responses; repeat on a second route; also sniff which
+    request the UI fires after clicking a concrete outbound day. If the
+    inbound grid is independent → `indicative_rt = outbound_leg +
+    inbound_leg`; if it depends on the selected outbound → candidates must
+    be generated through real pairing. Either way the Observation carries
+    `price_basis = adult_leg` — never a fake-precise family estimate
+    (passenger-composition support in `/fsf` to be checked too).
+  - **E1-B** — airBaltic adapter + Ryanair duration-bounds fix → two real
+    stage-A providers.
+  - **E1-C** — watchlist derivation skeleton (no climate yet).
+  - **E1-D** — Open-Meteo normals + three-state climate scoring enriching
+    the watchlist.
+  - **E1-E — stage-A dry run over the full watchlist**, ending in THE
+    milestone report that says whether the architecture closes:
+    `N theoretical watches / climate eligible / marginal / excluded /
+    airBaltic-covered / Ryanair-covered / overlap / blind → Google sampler /
+    estimated google budget per night`. (airBaltic's ~60% *theoretical*
+    coverage may shift materially once the watchlist is climate-derived.)
 - **E2 — radar:** stage-A pipeline + history + dashboard price table with
   trends.
 - **E3 — verify + alerts:** stage B, deal score, thresholds, HA device +
@@ -455,7 +482,8 @@ Confirmed 2026-08-23 (owner):
 8. **E0 gate closed (2026-08-23): call C — Travelpayouts off the critical
    path** (9% coverage, self-transfer product mismatch; full numbers in §7).
    Stage A = Ryanair + carrier low-fare calendars (airBaltic, Norwegian,
-   Finnair — E1 spikes) + polite Google sampling. **E0.1 (same day) also
+   Finnair — E1 spikes) + polite Google sampling. *(This stage-A carrier
+   list is SUPERSEDED by #10–#11.)* **E0.1 (same day) also
    closed the discovery-value question: 0/8 cheap TP hints led to a real
    bookable family price anywhere near threshold, no rank correlation → TP
    adapter is strictly optional and default-off, not even a hint layer.**
@@ -464,7 +492,7 @@ Confirmed 2026-08-23 (owner):
    Finnair → Google rotating sampler); each new carrier passes the mini-gate
    before its adapter lands; the Google sampler is coverage-aware from the
    start; Travelpayouts is an optional hint provider — not a fallback, not a
-   dependency.
+   dependency. *(The fixed carrier list is SUPERSEDED by #10–#11.)*
 10. **Carrier strategy redesigned (owner + review, 2026-08-23):** supersedes
     the fixed airline list in #9. Stage A = *proven carrier fare sources +
     coverage-aware Google sampling*; carriers are discovered via a full
@@ -477,7 +505,19 @@ Confirmed 2026-08-23 (owner):
     connectors). Admitted: **airBaltic** (open JSON, ~60% watch coverage,
     RIX all-direct) alongside Ryanair. Rejected at the gate: Wizz (1 pool
     destination), Norwegian (Cloudflare), Finnair (Akamai), all connectors
-    (no reachable calendar JSON). Full scorecard: docs/carrier-recon.md.
+    (no reachable calendar JSON) — recorded as **NOT ADMITTED** (an economic
+    verdict against the current gate, not a quality judgment; revisit
+    triggers documented in the scorecard). Full scorecard:
+    docs/carrier-recon.md.
+13. **Review round 2 accepted (2026-08-23):** README brought up to date with
+    the recon (it had gone stale — the doc a stranger sees first);
+    "REJECTED" renamed NOT ADMITTED; Google sampler made budget-based with a
+    priority score and smart pair ordering (see §4C); `buy_threshold` and
+    `market_score` split in the data model with digest-vs-push routing (see
+    §4D); thresholds stay at promo-hunt levels; E1 reordered to A–E ending
+    in the stage-A dry-run coverage report; the airBaltic pairing spike
+    blocks the adapter; **no further carrier recons**. Feasibility raised to
+    ~0.95 by the reviewer.
 12. **External review accepted (2026-08-23):** provider-agnostic observation
    model with `days_to_departure` stored from day one; top-K date pairs sent
    to verify; three-state climate (eligible/marginal/excluded) with a 0–10

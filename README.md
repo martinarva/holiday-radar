@@ -27,16 +27,22 @@ Naive per-date searching would need thousands of API calls a day. Instead:
 
 ```
 STAGE A — RADAR (wide & cheap, nightly)
-  cache/calendar sources: ONE request covers a whole date window
-  Travelpayouts Data API (all carriers) + Ryanair fare finder (keyless)
+  carrier fare calendars, ONE request covers a whole date window:
+  airBaltic /api/fsf (per-day prices + direct flag, both directions)
+  + Ryanair fare finder (cheapest RT per destination in window)
+  + budget-based Google sampler for watches the carriers don't cover
         │ threshold / vs-history deal score
         ▼
 STAGE B — VERIFY (narrow & precise, top candidates only)
-  real search on the exact best date pair via Google Flights
-  (fast-flights) → exact family price, times, carrier
+  real search on the exact best date pairs via Google Flights
+  (fast-flights; hosted SERP APIs as backup) → exact family price
         ▼
 ALERT → MQTT/Home Assistant + dashboard + price history (SQLite)
 ```
+
+Carrier sources are admitted empirically — the full recon scorecard of 15
+carriers lives in [docs/carrier-recon.md](docs/carrier-recon.md); only
+sources that beat Google sampling on cost survive.
 
 Total running cost: **€0** (free tiers and public endpoints, polite volume).
 
@@ -45,20 +51,28 @@ Total running cost: **€0** (free tiers and public endpoints, polite volume).
 **Early development.** The [project brief](SPEC.md) is final; source viability
 is proven (E0, Aug 2026):
 
+- ✅ **Carrier recon complete** (15 carriers probed): stage A =
+  **airBaltic + Ryanair + Google sampler**. airBaltic admitted with open
+  JSON endpoints (a year of per-day prices + direct-flag in one request,
+  both directions, plain curl) covering ~60% of watches — from Riga all 26
+  pool destinations are direct. Norwegian/Finnair/Wizz and all connectors
+  not admitted (bot walls or negligible coverage); details in
+  [docs/carrier-recon.md](docs/carrier-recon.md).
 - ✅ Ryanair fare finder & routes — real window prices, keyless
 - ✅ Open-Meteo climate normals — filter mechanism validated
 - ✅ fast-flights (Google Flights) — works from EU IPs after a
   privacy-preserving consent handshake (built in)
-- ✅ Travelpayouts measured — and **rejected** from the critical path
-  (E0 gate: 9% in-window coverage; E0.1: cheap hints don't correlate with
-  bookable family prices — mostly virtual-interline artifacts). The adapter
-  stays, strictly optional.
+- ✅ Travelpayouts measured — **not admitted** (E0 gate: 9% in-window
+  coverage; E0.1: cheap hints don't correlate with bookable family prices —
+  mostly virtual-interline artifacts). The adapter stays, strictly optional
+  and off by default.
 - ✅ Hosted SERP-API backups wired for both vendors — SerpApi.com (free
   250/mo, enough for the whole verify stage) and SearchApi.io — **triple
   cross-validated** against fast-flights (identical itinerary, identical
   price from all three)
-- 🔜 E1: carrier mini-gates (airBaltic, Norwegian, Finnair) → climate
-  normals + watchlist derivation → E2 radar pipeline → E3 alerts/HA
+- 🔜 E1 (in order): airBaltic pairing spike → airBaltic adapter + Ryanair
+  duration fix → watchlist skeleton → climate scoring → **stage-A dry run**
+  with a full coverage report → E2 radar pipeline → E3 alerts/HA
 
 ## Quick start (development)
 
@@ -98,10 +112,12 @@ file and pointing `holidays.preset` at it. Destinations:
 
 | Source | Nature | Use |
 |---|---|---|
-| [Travelpayouts Data API](https://travelpayouts.github.io/slate/) | official, free token | stage-A screening (cached Aviasales prices, all carriers) |
-| Ryanair fare finder | public but unofficial JSON | stage-A screening on Ryanair routes |
-| [fast-flights](https://github.com/AWeirdDev/flights) | Google Flights scraper library | stage-B verification only (a handful of searches/day) |
+| airBaltic `/api/fsf` | open JSON the airline's own site uses (unofficial, not robots-disallowed) | stage-A core: per-day prices + direct flag, both directions, ~60% of watches |
+| Ryanair fare finder | public but unofficial JSON | stage-A: cheapest RT per destination across a window |
+| [fast-flights](https://github.com/AWeirdDev/flights) | Google Flights scraper library | budget-based stage-A sampler for blind watches + stage-B verification |
+| Hosted SERP APIs (SerpApi / SearchApi) | official, keyed | verify reliability backup (free tiers) |
 | [Open-Meteo](https://open-meteo.com/) | free, keyless | one-off climate normals |
+| [Travelpayouts Data API](https://travelpayouts.github.io/slate/) | official, free token | **optional, off by default** — did not pass the E0 gate |
 
 This is built for **personal, low-frequency** use (one nightly screening
 pass, ≤10 verifications/day). No CAPTCHA solving, no proxy rotation, no
@@ -114,7 +130,10 @@ soft and the rest keeps working.
 - [x] E0 — source spike (keyless parts)
 - [x] E0 — Travelpayouts benchmark → **call C** (off the critical path;
       E0.1 discovery-value test confirmed: 0/8 useful hints)
-- [ ] E1 — foundation: config, presets, climate normals, watchlist derivation
+- [x] E1a — carrier recon (15 carriers) → **airBaltic + Ryanair admitted**
+- [ ] E1b — airBaltic pairing spike → adapter; Ryanair duration fix
+- [ ] E1c — watchlist skeleton → Open-Meteo climate scoring → stage-A
+      **dry run + coverage report** (the "does the architecture close?" milestone)
 - [ ] E2 — radar pipeline, price history, dashboard
 - [ ] E3 — verification, deal score, MQTT/Home Assistant alerts, digest
 - [ ] E4 — polish: adopt-into-precision-watch, threshold tuning, bag costs
