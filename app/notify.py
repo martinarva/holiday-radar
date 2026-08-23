@@ -30,6 +30,7 @@ import os
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
+from app import opportunity
 from app.config import Config
 from app.opportunity import deal_label
 
@@ -94,8 +95,11 @@ def describe(cfg: Config, holiday, item: dict, opt: dict) -> dict:
         parts.append(f"{round(clim['t_max_c'])}°C typical")
     parts.append("no school missed" if not school
                  else f"{school} school day{'s' if school > 1 else ''}")
-    if opt.get("layover_hotel_eur"):
-        parts.append(f"includes €{opt['layover_hotel_eur']:.0f} layover hotel")
+    # NB: not `key`/`label` — those hold the deal grade from above.
+    for what, field in (("layover hotel", "layover_hotel_eur"),
+                        (f"{opt['origin']} hotel night", "origin_hotel_eur")):
+        if opt.get(field):
+            parts.append(f"includes €{opt[field]:.0f} {what}")
     return {
         "holiday_id": holiday.id, "holiday": holiday.name,
         "destination": item["destination"],
@@ -108,6 +112,7 @@ def describe(cfg: Config, holiday, item: dict, opt: dict) -> dict:
         "flights_eur": opt.get("flights_eur"),
         "logistics_eur": opt.get("logistics_eur"),
         "layover_hotel_eur": opt.get("layover_hotel_eur"),
+        "origin_hotel_eur": opt.get("origin_hotel_eur"),
         "out_date": opt["out_date"], "back_date": opt["back_date"],
         "nights": opt["nights"],
         "airlines": opt.get("airlines") or [],
@@ -138,28 +143,52 @@ def _headline(kind: str, d: dict) -> str:
 # --- deciding what is worth a push -----------------------------------------
 
 def _last_alert(conn, kind: str, holiday_id: str, destination: str):
+    """The last thing we actually SAID about this destination.
+
+    Expired rows are excluded: an alert the cap dropped was never delivered,
+    so letting it act as the dedupe baseline silenced the same deal for a
+    fortnight over a message nobody ever received.
+    """
     return conn.execute(
         """SELECT effective_eur, sent_at FROM alerts
-           WHERE kind=? AND holiday_id=? AND destination=?
+           WHERE kind=? AND holiday_id=? AND destination=? AND status<>?
            ORDER BY id DESC LIMIT 1""",
-        (kind, holiday_id, destination)).fetchone()
+        (kind, holiday_id, destination, EXPIRED)).fetchone()
 
 
-def _all_time_low(conn, holiday_id: str, destination: str,
+def _all_time_low(cfg: Config, conn, holiday_id: str, destination: str,
                   before_night: str) -> float | None:
-    """Cheapest family FARE ever recorded for this holiday × destination.
+    """Cheapest EFFECTIVE family cost ever recorded for this destination.
 
-    Compared against `flights_eur`, never the effective cost: the stored
-    series is bare fares, so measuring today's fare-plus-logistics against
-    yesterday's fare would both miss real drops and invent imaginary ones
-    whenever the winning origin changed.
+    It has to be the effective cost, because that is the number the alert
+    prints. Comparing bare fares while announcing totals produced "Málaga
+    €842 — lowest we've seen" for a trip €42 dearer than the €800 record it
+    claimed to beat: the new winner was a cheaper RIX fare carrying €142 of
+    logistics. Whatever we headline is what we must measure.
+
+    (market_signal is a different question — how the FARE is moving — and
+    rightly stays on bare fares.)
     """
-    r = conn.execute(
-        """SELECT MIN(estimated_family_eur) lo FROM observations
-           WHERE holiday_id=? AND destination=? AND observed_night < ?
-             AND estimated_family_eur IS NOT NULL""",
-        (holiday_id, destination, before_night)).fetchone()
-    return r["lo"] if r and r["lo"] is not None else None
+    rows = conn.execute(
+        """SELECT o.origin, o.out_date, o.back_date, o.estimated_family_eur f,
+                  o.layover_overnight, o.out_departure, o.in_arrival
+             FROM observations o
+            WHERE o.holiday_id=? AND o.destination=? AND o.observed_night < ?
+              AND o.estimated_family_eur IS NOT NULL""",
+        (holiday_id, destination, before_night)).fetchall()
+    best = None
+    for r in rows:
+        og = cfg.origin(r["origin"])
+        if og is None:
+            continue
+        nights = (date.fromisoformat(r["back_date"])
+                  - date.fromisoformat(r["out_date"])).days
+        eff = opportunity.effective_cost(cfg, r["f"], og.logistics_eur(nights),
+                                         r["layover_overnight"])
+        if og.hotel_needed(r["out_departure"], r["in_arrival"]):
+            eff = round(eff + float(og.hotel_eur or 0), 2)
+        best = eff if best is None else min(best, eff)
+    return best
 
 
 def _improved_enough(cfg: Config, new: float, old: float | None) -> bool:
@@ -198,6 +227,11 @@ def candidates(cfg: Config, conn, holiday, items: list[dict], night: str,
         opt = item.get("best_option")
         if not opt or opt.get("effective_eur") is None:
             continue
+        # A price carried over from an earlier night is fine to SHOW — the UI
+        # labels it — but it is not news, and a provider outage must not buzz
+        # a phone with a fare nobody re-checked. Alerts need tonight's data.
+        if opt.get("from_night"):
+            continue
         d = describe(cfg, holiday, item, opt)
         eff = d["effective_eur"]
 
@@ -211,16 +245,14 @@ def candidates(cfg: Config, conn, holiday, items: list[dict], night: str,
                             "previous_eur": prev["effective_eur"] if prev else None})
                 continue        # one alert per destination per run
 
-        # 2) cheaper than anything on record — fare vs fare (see _all_time_low)
+        # 2) cheaper than anything on record, in the same measure we print
         #
         # The record itself is the only baseline needed: the series already
         # contains every night we have alerted on, so it moves down with us.
-        # Consulting the last alert as well only reintroduced the unit
-        # mismatch, since alerts store the effective cost.
-        fare = d.get("flights_eur")
-        low = _all_time_low(conn, holiday.id, item["destination"], night)
-        if (low is not None and fare is not None and fare < low
-                and _improved_enough(cfg, fare, low)):
+        # Consulting the last alert as well only reintroduced a unit mismatch.
+        low = _all_time_low(cfg, conn, holiday.id, item["destination"], night)
+        if (low is not None and eff < low
+                and _improved_enough(cfg, eff, low)):
             out.append({"kind": KIND_LOW, **d,
                         "title": _headline(KIND_LOW, d),
                         "previous_eur": round(low, 2)})
@@ -288,6 +320,8 @@ def queue(cfg: Config, conn, holiday, items: list[dict], night: str,
     """
     if not _prefs(cfg).get("enabled", True):
         return 0
+    # Prune first: a stale queue entry must not shape tonight's decisions.
+    expire_stale(conn, night, cfg, log=log)
     picked = candidates(cfg, conn, holiday, items, night, now=now)
     queued = 0
     for a in picked:
@@ -376,7 +410,10 @@ def deliver(cfg: Config, conn, url: str | None = None, log=print,
         return None
     url = url or webhook_url()
     if not url:
-        return None
+        # Not "delivered" — there is nowhere to deliver to. The caller must
+        # not record the slot as done, or a webhook configured later never
+        # flushes the queue.
+        raise NotifyError(f"{WEBHOOK_ENV} is not set")
     limit = int(_prefs(cfg).get("max_per_run", 5))
     latest = conn.execute(
         "SELECT MAX(observed_night) n FROM observations").fetchone()
@@ -390,9 +427,11 @@ def deliver(cfg: Config, conn, url: str | None = None, log=print,
     payload = digest(batch)
     try:
         poster(url, payload)
-    except NotifyError as e:
-        log(f"digest not delivered, staying queued: {e}")
-        return None            # a failed push must never lose the alerts
+    except NotifyError:
+        # A failed push must never lose the alerts, and must never let the
+        # caller mark the morning done — the retry depends on it.
+        log("digest not delivered, staying queued")
+        raise
     now = now or datetime.now(timezone.utc)
     conn.executemany(
         "UPDATE alerts SET status=?, delivered=1, sent_at=? WHERE id=?",

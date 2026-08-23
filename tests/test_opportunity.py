@@ -352,3 +352,59 @@ def test_a_late_return_charges_the_origins_hotel(cfg, tmp_path):
         400.0 + hel.logistics_eur(7) + hel.hotel_eur, 2)
     # once it is a real cost it stops being advertised as a mere risk
     assert opt["hotel_risk_eur"] is None
+
+
+def test_a_cheap_carrier_survives_a_dearer_carriers_refresh(cfg, tmp_path):
+    """Falling back per watch was not enough — it must be per SOURCE.
+
+    Ryanair prices AGP at EUR 400 yesterday and fails tonight; airBaltic
+    answers tonight with EUR 1200. Keyed on the watch, the newest night is
+    tonight and the Ryanair row drops out of the join, so the cheap option
+    disappears behind the dearer fresh one.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 25), date(2026, 11, 1)
+
+    def obs(source, fam):
+        return Observation(origin="TLL", destination="AGP", out_date=out,
+                           back_date=back, price_adult_eur=round(fam / 4, 2),
+                           source=source, price_basis="family_quote",
+                           estimated_family_eur=fam, is_direct=True)
+
+    dbm.upsert_observations(conn, h.id, [obs("ryanair", 400.0)], seats=4,
+                            night="2026-08-22")
+    dbm.upsert_observations(conn, h.id, [obs("airbaltic", 1200.0)], seats=4,
+                            night="2026-08-23")
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "TLL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "covered_direct"}])
+
+    agp = opp.build(cfg, conn, h, night="2026-08-23", climate_cache={})[0]
+    assert agp["cheapest_option"]["effective_eur"] == 400.0
+    assert agp["cheapest_option"]["source"] == "ryanair"
+    # ...and it is honest that the cheap one is a night old
+    assert agp["cheapest_option"]["from_night"] == "2026-08-22"
+
+
+def test_freshness_is_tracked_per_row_not_per_watch(cfg, tmp_path):
+    """One source fresh, another carried over — each says which it is."""
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 25), date(2026, 11, 1)
+    for src, fam, night in (("ryanair", 900.0, "2026-08-22"),
+                            ("airbaltic", 800.0, "2026-08-23")):
+        dbm.upsert_observations(conn, h.id, [Observation(
+            origin="TLL", destination="AGP", out_date=out, back_date=back,
+            price_adult_eur=round(fam / 4, 2), source=src,
+            price_basis="family_quote", estimated_family_eur=fam,
+            is_direct=True)], seats=4, night=night)
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "TLL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "covered_direct"}])
+    agp = opp.build(cfg, conn, h, night="2026-08-23", climate_cache={})[0]
+    # the fresh airBaltic row wins on price and is not marked stale
+    assert agp["cheapest_option"]["source"] == "airbaltic"
+    assert agp["cheapest_option"]["from_night"] is None

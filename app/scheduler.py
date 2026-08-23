@@ -211,6 +211,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
         h = hols[r.holiday_id]
         s = state.get((r.holiday_id, r.origin, r.destination)) or {}
         idx = int(s.get("rotation_idx") or 0)
+        start_idx = idx
         if pairs_per_watch <= 0:
             for pair in h.date_pairs():
                 tasks.append((r, pair))
@@ -221,16 +222,21 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 if pair is None:
                     break
                 tasks.append((r, pair))
+        # remember where this watch's rotation WOULD land per extra pair, so
+        # a budget cut can rewind it to what actually ran
         pending_state[(r.holiday_id, r.origin, r.destination)] = {
-            "rotation_idx": idx, "last_google_night": night}
+            "start_idx": start_idx, "rotation_idx": idx}
     if google_budget:
         tasks = tasks[:google_budget]
-    # Rotation and last_google_night may only advance for watches we really
-    # query. Recording them before the budget cut told the UI that all four
-    # watches had been tried when only one had, so "still scanning" turned
-    # into a silent, permanent "nothing flies here".
-    queried = {(r.holiday_id, r.origin, r.destination) for r, _ in tasks}
-    state.update({k: v for k, v in pending_state.items() if k in queried})
+    # Rotation and last_google_night may only advance for pairs we really
+    # queried, AND only once the query came back. Advancing for the whole
+    # watch before the cut told the UI that four watches had been tried when
+    # one had; advancing on a provider error marked a failed watch
+    # "no flights found" and hid it for good.
+    surviving: dict[tuple, int] = {}
+    for r, _pair in tasks:
+        k = (r.holiday_id, r.origin, r.destination)
+        surviving[k] = surviving.get(k, 0) + 1
 
     best_per_watch: dict[tuple, Observation] = {}
     used_discovery = 0
@@ -242,13 +248,20 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
         r, pair = task
         return task, google_search(r.origin, r.destination, pair[0], pair[1])
 
+    # pairs that actually came back per watch, and whether any query errored
+    completed: dict[tuple, int] = {}
+    failed: set[tuple] = set()
+
     def _handle(task, offers, err):
         nonlocal used_discovery
         used_discovery += 1            # a failed query still spends budget
         r, _pair = task
+        k = (r.holiday_id, r.origin, r.destination)
         if err is not None:
             errors.append(f"google discovery {r.origin}-{r.destination}: {err}")
+            failed.add(k)              # do not call this watch "asked"
             return
+        completed[k] = completed.get(k, 0) + 1
         if not offers:
             return
         dbm.upsert_offers(conn, r.holiday_id, offers, seats, role="discovery",
@@ -285,6 +298,23 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 _handle(task, None, e)
             time.sleep(pace)
 
+    # Now that the queries have run, advance each watch's rotation by the
+    # number of pairs that actually came back, and only mark it asked if none
+    # of its queries errored.
+    for k in surviving:
+        done = completed.get(k, 0)
+        if not done:
+            continue
+        prev = state.get(k) or {}
+        plan = pending_state.get(k) or {}
+        start = int(plan.get("start_idx") or 0)
+        end = int(plan.get("rotation_idx") or start)
+        # `end` is where the watch would land had ALL its planned pairs run;
+        # compare against that, not against the handful the budget left.
+        idx = end if done >= max(1, end - start) else start + done
+        state[k] = {"rotation_idx": idx,
+                    "last_google_night": (prev.get("last_google_night")
+                                          if k in failed else night)}
     for (hid, og, dst), st in state.items():
         dbm.sampler_state_upsert(conn, hid, og, dst, st["rotation_idx"],
                                  st.get("last_google_night"))
@@ -333,7 +363,11 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
 
     candidates: list[tuple[float, object, Observation]] = []
     for r in relevant:
-        pool = list(r.bt_candidates[:1]) + ([r.ry_pair] if r.ry_pair else [])
+        # Every admitted carrier, or a Wizz-only watch is never verified at
+        # all: it produced verify_pool=0 and the ULCC branch below — the one
+        # that knows Google cannot price it — was unreachable for Wizz.
+        pool = (list(r.bt_candidates[:1]) + ([r.ry_pair] if r.ry_pair else [])
+                + ([r.wz_pair] if r.wz_pair else []))
         for o in pool:
             notify = tier_notify(r.destination)
             fam = o.family_estimate_eur(seats)
@@ -381,7 +415,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 level="market-context",
                 reason=(reason + "; source=ryanair, not on Google — this is the "
                         "cheapest non-Ryanair alternative, NOT a verification"),
-                indicative_family_eur=fam)
+                indicative_family_eur=fam, night=night)
             time.sleep(pace)
             continue
         if o.source == "google_flights":
@@ -395,7 +429,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 airlines=json.dumps((o.raw or {}).get("airlines", [])),
                 legs=json.dumps((o.raw or {}).get("legs", [])),
                 level="flight-verified", reason=reason,
-                indicative_family_eur=fam)
+                indicative_family_eur=fam, night=night)
             continue
         used_verify += 1
         try:
@@ -416,7 +450,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             airlines=json.dumps(list(best.airlines)) if best else "[]",
             legs=json.dumps(list(best.legs)) if best else "[]",
             level="flight-verified" if best else "verify-no-result",
-            reason=reason, indicative_family_eur=fam)
+            reason=reason, indicative_family_eur=fam, night=night)
         time.sleep(pace)
     log(f"verify hook: {used_verify}/{verify_budget} candidates handled "
         f"(pool {len(candidates)})")

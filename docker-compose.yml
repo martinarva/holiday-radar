@@ -39,7 +39,10 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       - ./presets:/app/presets:ro
     command: ["python", "-m", "app.cli", "run-scheduler"]
-    # the image's HTTP healthcheck belongs to the web role only
+    # The image's HTTP healthcheck belongs to the web role, which serves it.
+    # This container's health is visible through /health instead: a recorded
+    # nightly-failed makes that endpoint answer 503, so a daemon stuck in a
+    # retry loop no longer looks well to outside monitoring.
     healthcheck:
       disable: true
     depends_on:

@@ -236,6 +236,74 @@ def effective_cost(cfg: Config, flights_eur, logistics_eur,
                  + layover_hotel_eur(cfg, layover_overnight), 2)
 
 
+def latest_priced_rows(conn, holiday_id: str, night: str | None,
+                       destination: str | None = None) -> list[dict]:
+    """Every watch's most recent priced row at or before `night`, per SOURCE.
+
+    THE query for "what do we know tonight". Both the opportunity list and
+    the destination detail view go through it, because when they each had
+    their own the detail page showed a different price from the card that
+    linked to it, and an outage blanked one view while the other coped.
+
+    Each row carries `_from_night` — None when it is tonight's, otherwise the
+    night it was actually observed.
+    """
+    if not night:
+        return []
+    sql = """
+        SELECT o.* FROM observations o
+        JOIN (SELECT origin, destination, source, MAX(observed_night) n
+                FROM observations
+               WHERE holiday_id=? AND observed_night<=?
+                 AND estimated_family_eur IS NOT NULL {dst_inner}
+               GROUP BY origin, destination, source) latest
+          ON o.origin=latest.origin AND o.destination=latest.destination
+         AND o.source=latest.source AND o.observed_night=latest.n
+        WHERE o.holiday_id=? AND o.estimated_family_eur IS NOT NULL {dst_outer}
+    """
+    params: list = [holiday_id, night]
+    if destination:
+        params.append(destination)
+    params.append(holiday_id)
+    if destination:
+        params.append(destination)
+    sql = sql.format(
+        dst_inner="AND destination=?" if destination else "",
+        dst_outer="AND o.destination=?" if destination else "")
+    rows = []
+    for r in conn.execute(sql, params):
+        row = dict(r)
+        row["_from_night"] = (None if r["observed_night"] == night
+                              else r["observed_night"])
+        rows.append(row)
+    return rows
+
+
+def row_costs(cfg: Config, row, nights: int) -> dict:
+    """fare + logistics + every hotel the itinerary actually forces.
+
+    One place, so the headline, the origin table, the school ladder and the
+    date grid cannot disagree about what a trip costs.
+    """
+    og = cfg.origin(row["origin"])
+    logistics = og.logistics_eur(nights) if og else 0.0
+    overnight = _col(row, "layover_overnight")
+    lay_hotel = layover_hotel_eur(cfg, overnight)
+    origin_hotel = 0.0
+    if og and og.hotel_needed(_col(row, "out_departure"),
+                              _col(row, "in_arrival")):
+        origin_hotel = float(og.hotel_eur or 0)
+    fare = row["estimated_family_eur"]
+    return {
+        "flights_eur": fare,
+        "logistics_eur": logistics,
+        "layover_hotel_eur": lay_hotel or None,
+        "origin_hotel_eur": origin_hotel or None,
+        "effective_eur": round((fare or 0) + logistics + lay_hotel
+                               + origin_hotel, 2),
+    }
+
+
 def _col(row, name, default=None):
     """sqlite3.Row has no .get, and older rows predate newer columns."""
     try:
@@ -250,24 +318,16 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
     out_d = date.fromisoformat(row["out_date"])
     back_d = date.fromisoformat(row["back_date"])
     nights = (back_d - out_d).days
-    fam = row["estimated_family_eur"]
-    logistics = og.logistics_eur(nights)
     sd_b, sd_a = h.school_days_breakdown(out_d, back_d, cfg.public_holidays)
     airlines = json.loads(row["airlines"] or "[]")
     # A connection long enough to need a bed is a cost, not a bargain: the
     # EUR 687 Tirana "deal" was 16h35 in Warsaw (see app/itinerary.py).
     max_lay = _col(row, "max_layover_h")
     lay_overnight = _col(row, "layover_overnight")
-    lay_hotel = layover_hotel_eur(cfg, lay_overnight)
-    # The origin's own hotel rule is a real cost once the clock times are
-    # known — a 06:00 Riga departure or a 01:00 return means a room. It was
-    # computed and displayed as "risk" but never added, so a EUR 400 fare from
-    # HEL showed EUR 620 effective when the honest figure was EUR 710.
     times = {k: row[k] for k in ("out_departure", "out_arrival",
                                  "in_departure", "in_arrival")}
-    origin_hotel = (float(og.hotel_eur or 0)
-                    if og.hotel_needed(times["out_departure"],
-                                       times["in_arrival"]) else 0.0)
+    costs = row_costs(cfg, row, nights)      # the one cost definition
+    origin_hotel = costs["origin_hotel_eur"] or 0.0
     observed = datetime.fromisoformat(row["observed_at"])
     age_h = round((_now() - observed).total_seconds() / 3600, 1)
     verified = conn.execute("""
@@ -278,12 +338,11 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
           row["out_date"], row["back_date"])).fetchone()
     return {
         "origin": og.code,
-        "flights_eur": fam,
-        "logistics_eur": logistics,
-        "layover_hotel_eur": lay_hotel or None,
-        "origin_hotel_eur": origin_hotel or None,
-        "effective_eur": round(effective_cost(cfg, fam, logistics,
-                                              lay_overnight) + origin_hotel, 2),
+        "flights_eur": costs["flights_eur"],
+        "logistics_eur": costs["logistics_eur"],
+        "layover_hotel_eur": costs["layover_hotel_eur"],
+        "origin_hotel_eur": costs["origin_hotel_eur"],
+        "effective_eur": costs["effective_eur"],
         "adult_eur": row["price_adult_eur"],
         "out_date": row["out_date"], "back_date": row["back_date"],
         "nights": nights,
@@ -302,12 +361,20 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
         "layover": {"max_hours": max_lay,
                     "label": _col(row, "layover_label"),
                     "overnight": None if lay_overnight is None
-                    else bool(lay_overnight)},
+                    else bool(lay_overnight),
+                    # False = a gap we could not read; never score it as clean
+                    "certain": (None if _col(row, "layover_certain") is None
+                                else bool(_col(row, "layover_certain")))},
         "verify_mode": ("carrier-direct" if row["source"] in ULCC_SOURCES
                         else "google-verifiable"),
         "extra_time_h": og.extra_time_h,
-        # still shown when the times are unknown: a risk we cannot yet price
-        "hotel_risk_eur": (og.hotel_eur or None) if not origin_hotel else None,
+        # A risk only while the clock times are unknown. Once they are known
+        # the answer is settled: either it is in effective_eur above, or the
+        # flight is at a civilised hour and there is no risk to advertise.
+        "hotel_risk_eur": ((og.hotel_eur or None)
+                           if not origin_hotel
+                           and not (times["out_departure"] or times["in_arrival"])
+                           else None),
         "verification": ({"level": verified["level"],
                           "price_total_eur": verified["price_total_eur"],
                           "at": verified["verified_at"]} if verified
@@ -321,8 +388,10 @@ def _score_option(cfg: Config, dst: str, opt: dict, clim: dict, tier) -> None:
     m = opt["market"]
     value = _value_score(cfg, dst, opt["effective_eur"], m.get("score"))
     lay = opt.get("layover") or {}
-    lay_score = (None if lay.get("max_hours") is None
-                 else itinerary.score_for_hours(lay["max_hours"]))
+    certain = lay.get("certain")
+    lay_score = (None if lay.get("max_hours") is None and certain is not False
+                 else itinerary.score_for_hours(lay.get("max_hours"),
+                                                certain is not False))
     quality = (W_CLIMATE * (clim["score"] or 0)
                + W_ITINERARY * _itinerary_score(opt["is_direct"], None, lay_score)
                + W_SCHOOL * _school_score(opt["school_days"],
@@ -393,26 +462,12 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
     # "scanning" as though nothing were known. Rows carry their age so the UI
     # can say how stale they are instead of pretending they do not exist.
     pair_rows: dict[tuple[str, str], dict[tuple[str, str], dict]] = {}
-    stale: dict[tuple[str, str], str] = {}
-    if night:
-        for r in conn.execute("""
-            SELECT o.* FROM observations o
-            JOIN (SELECT origin, destination, MAX(observed_night) n
-                    FROM observations
-                   WHERE holiday_id=? AND observed_night<=?
-                     AND estimated_family_eur IS NOT NULL
-                   GROUP BY origin, destination) latest
-              ON o.origin=latest.origin AND o.destination=latest.destination
-             AND o.observed_night=latest.n
-            WHERE o.holiday_id=? AND o.estimated_family_eur IS NOT NULL
-        """, (holiday.id, night, holiday.id)):
-            k = (r["origin"], r["destination"])
-            pk = (r["out_date"], r["back_date"])
-            if r["observed_night"] != night:
-                stale[k] = r["observed_night"]
-            cur = pair_rows.setdefault(k, {}).get(pk)
-            if cur is None or r["estimated_family_eur"] < cur["estimated_family_eur"]:
-                pair_rows[k][pk] = dict(r)
+    for row in latest_priced_rows(conn, holiday.id, night):
+        k = (row["origin"], row["destination"])
+        pk = (row["out_date"], row["back_date"])
+        cur = pair_rows.setdefault(k, {}).get(pk)
+        if cur is None or row["estimated_family_eur"] < cur["estimated_family_eur"]:
+            pair_rows[k][pk] = row
 
     states = {(r["origin"], r["destination"]): dict(r) for r in conn.execute(
         "SELECT * FROM watch_state WHERE holiday_id=?", (holiday.id,))}
@@ -453,14 +508,12 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
                      "delta_eur": hist["delta_eur"],
                      "delta_pct": hist["delta_pct"],
                      "nights": hist["nights_with_data"]}
-            from_night = stale.get((og_code, dst))
             cands = []
             for row in rows.values():
                 opt = _origin_option(cfg, holiday, og, row, conn)
                 opt["_destination"] = dst
-                # carried over from an older night because tonight's attempt
-                # for THIS watch produced nothing
-                opt["from_night"] = from_night
+                # the night THIS row came from, when it is not tonight's
+                opt["from_night"] = row.get("_from_night")
                 opt["trend"] = trend
                 opt["market"] = market_signal(conn, holiday.id, og_code, dst,
                                               opt["flights_eur"])

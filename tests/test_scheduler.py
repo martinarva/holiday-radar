@@ -350,3 +350,51 @@ def test_google_cannot_verify_any_ulcc_not_just_ryanair():
     assert {"ryanair", "wizzair"} <= ULCC_SOURCES
     assert "airbaltic" not in ULCC_SOURCES
     assert "google_flights" not in ULCC_SOURCES
+
+
+def _sampler_row(conn, hid, og, dst):
+    return conn.execute(
+        "SELECT rotation_idx, last_google_night FROM sampler_state "
+        "WHERE holiday_id=? AND origin=? AND destination=?",
+        (hid, og, dst)).fetchone()
+
+
+def test_the_budget_cut_rewinds_rotation_to_what_actually_ran(cfg, tmp_path):
+    """Three pairs planned per watch, one query budgeted in total.
+
+    Recording each watch's final rotation regardless left idx=3 after a
+    single query, so two thirds of its date grid were skipped and never
+    revisited, and every unqueried watch was stamped as asked tonight.
+    """
+    conn_path = tmp_path / "s.db"
+    g = _fake_google()
+    run_nightly(cfg, conn_path, google_budget=1, audit_budget=0,
+                verify_budget=0, pairs_per_watch=3, workers=1,
+                log=lambda *_: None, google_search=g, sleep_s=0,
+                collect=_fake_collect(cfg, n_blind=4, n_covered=0, dormant=0),
+                rng=random.Random(1))
+    conn = dbm.init_db(conn_path)
+    rows = list(conn.execute(
+        "SELECT destination, rotation_idx, last_google_night FROM sampler_state"))
+    assert len(rows) == 1, "only the watch we actually queried may be recorded"
+    assert rows[0]["rotation_idx"] == 1, "one query advances the rotation by one"
+    assert rows[0]["last_google_night"] is not None
+
+
+def test_a_failed_query_does_not_mark_a_watch_as_asked(cfg, tmp_path):
+    """Otherwise a provider outage reads as "no flights found", for good."""
+    conn_path = tmp_path / "s.db"
+
+    def boom(*_a, **_k):
+        raise ProviderError("upstream is down")
+
+    run_nightly(cfg, conn_path, google_budget=2, audit_budget=0,
+                verify_budget=0, pairs_per_watch=1, workers=1,
+                log=lambda *_: None, google_search=boom, sleep_s=0,
+                collect=_fake_collect(cfg, n_blind=2, n_covered=0, dormant=0),
+                rng=random.Random(1))
+    conn = dbm.init_db(conn_path)
+    rows = list(conn.execute(
+        "SELECT last_google_night FROM sampler_state"))
+    assert all(r["last_google_night"] is None for r in rows), \
+        "a watch whose query errored was never actually asked"

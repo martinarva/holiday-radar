@@ -290,7 +290,9 @@ async function viewRadar(el){
           <div class="mid">${esc(h.destination_name)}<span class="mut">, ${esc(h.country)}</span></div>
           <div class="big price">${eur(b.effective_eur)}</div>
           <div class="mut small">effective family cost${b.logistics_eur ?
-            ` — ${eur(b.flights_eur)} flights + ${eur(b.logistics_eur)} logistics` : ""}</div>
+            ` — ${eur(b.flights_eur)} flights + ${eur(b.logistics_eur)} logistics` : ""}${
+            b.layover_hotel_eur ? ` + ${eur(b.layover_hotel_eur)} layover hotel` : ""}${
+            b.origin_hotel_eur ? ` + ${eur(b.origin_hotel_eur)} hotel night` : ""}</div>
         </div>
         <div style="min-width:220px">
           <div><b>${esc(b.origin)} → ${esc(h.destination)}</b> · ${stops(b)}</div>
@@ -555,8 +557,12 @@ async function viewOpportunity(el, hid, dst){
   g.append($(`<div class="card">
     <div class="kicker mut small" style="letter-spacing:.08em">PRICE SIGNAL</div>
     ${m.state === "ready" ? `
+      <div class="mut small">How the FARE is moving. Logistics and hotels are
+        our overheads, not the market's — they sit in the effective price
+        above, and mixing them in here once showed a EUR 847 "current"
+        against a EUR 700 median while claiming 0% vs market.</div>
       <table style="margin-top:8px"><tbody>
-        <tr><td>Current</td><td class="n price">${eur(b.effective_eur)}</td></tr>
+        <tr><td>Current fare</td><td class="n price">${eur(b.flights_eur)}</td></tr>
         <tr><td>Median (${m.nights} nights)</td><td class="n price mut">${eur(m.median_eur)}</td></tr>
         <tr><td>Recent low</td><td class="n price mut">${eur(m.low_eur)}</td></tr>
       </tbody></table>

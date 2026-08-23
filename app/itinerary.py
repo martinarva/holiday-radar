@@ -137,13 +137,18 @@ def connection_of(leg_details: list[dict] | tuple[dict, ...] | None) -> Connecti
     return Connection(layovers=tuple(layovers), unparsed=bad)
 
 
-def score_for_hours(hours: float | None) -> float:
-    """Comfort score straight from a duration — for rows that stored only the
-    longest wait rather than the whole leg list."""
+def score_for_hours(hours: float | None, certain: bool = True) -> float:
+    """Comfort score from a stored duration, for rows that kept only the
+    longest wait rather than the whole leg list.
+
+    `certain=False` means at least one gap was unreadable, so the score is
+    capped the same way a live partially-parsed connection is.
+    """
     if hours is None:
-        return 10.0
-    return layover_score(Connection(layovers=(
-        Layover("?", hours, _ZERO, _ZERO + timedelta(hours=hours)),)))
+        return 10.0 if certain else 6.0
+    return layover_score(Connection(
+        layovers=(Layover("?", hours, _ZERO, _ZERO + timedelta(hours=hours)),),
+        unparsed=not certain))
 
 
 def layover_score(conn: Connection) -> float:
@@ -179,6 +184,7 @@ def summarize(leg_details, hotel_eur: float = 0.0) -> dict:
     """Everything the UI and the ranker need, in one dict."""
     conn = connection_of(leg_details)
     return {
+        "certain": conn.certain,
         "stops": conn.stops,
         "max_layover_h": conn.max_hours,
         "total_layover_h": round(conn.total_hours, 2) or None,

@@ -1,5 +1,6 @@
 # Test and lint only — deliberately NOT installed into the production image.
 -r requirements.txt
+pip-tools==7.6.1     # regenerates requirements.lock
 pytest==9.1.1
-httpx==0.28.1           # FastAPI TestClient
+httpx2==0.29.0          # FastAPI TestClient (starlette deprecates httpx)
 ruff==0.14.6

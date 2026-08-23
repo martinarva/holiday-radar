@@ -14,7 +14,7 @@ import json
 from datetime import date
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 
 from app import db as dbm
@@ -49,13 +49,15 @@ def _best_payload(cfg: Config, h, row: dict | None) -> dict | None:
     out = date.fromisoformat(row["out_date"])
     back = date.fromisoformat(row["back_date"])
     nights = (back - out).days
-    origin = cfg.origin(row["origin"])
-    logistics = origin.logistics_eur(nights) if origin else 0.0
+    from app import opportunity as opp
+    costs = opp.row_costs(cfg, row, nights)     # the one cost definition
     sd_before, sd_after = h.school_days_breakdown(out, back, cfg.public_holidays)
     return {
         "family_eur": row["estimated_family_eur"],
-        "logistics_eur": logistics,
-        "effective_eur": round((row["estimated_family_eur"] or 0) + logistics, 2),
+        "logistics_eur": costs["logistics_eur"],
+        "layover_hotel_eur": costs["layover_hotel_eur"],
+        "origin_hotel_eur": costs["origin_hotel_eur"],
+        "effective_eur": costs["effective_eur"],
         "adult_eur": row["price_adult_eur"],
         "out_date": row["out_date"], "back_date": row["back_date"],
         "nights": (back - out).days,
@@ -80,7 +82,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             "Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"})
 
     @app.get("/health")
-    def health():
+    def health(response: Response):
         conn = _conn(cfg)
         night = dbm.latest_night(conn)
         run = conn.execute(
@@ -93,7 +95,14 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             last = {"kind": run["kind"], "started_at": run["started_at"],
                     "finished_at": run["finished_at"], "errors": errors,
                     "summary": json.loads(run["summary_json"])}
-        return {"ok": True, "latest_night": night,
+        # A recorded failure must show as unhealthy. The scheduler container
+        # has no healthcheck of its own, so a daemon stuck in a retry loop
+        # looked perfectly well to anything watching this endpoint.
+        ok = not (run and (run["kind"].endswith("-failed")
+                           or run["finished_at"] is None))
+        if not ok:
+            response.status_code = 503     # so a probe actually notices
+        return {"ok": ok, "latest_night": night,
                 "observations_total": n_obs, "last_run": last}
 
     @app.get("/api/runs")
@@ -180,28 +189,26 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
         # every priced date pair this night, per origin -> date matrix +
         # the price-vs-school ladder
+        # Same source of truth as the card that linked here: per-source
+        # freshness fallback and the full cost, hotels included. When this
+        # view had its own query and its own arithmetic, the detail row said
+        # EUR 620 while the card said EUR 710, and a carried-over price the
+        # card showed produced an empty grid here.
         pairs = []
-        for r in conn.execute("""
-            SELECT * FROM observations
-            WHERE holiday_id=? AND destination=? AND observed_night=?
-              AND estimated_family_eur IS NOT NULL
-        """, (holiday_id, dst, night)):
+        for r in opp.latest_priced_rows(conn, holiday_id, night, dst):
             out_d = date.fromisoformat(r["out_date"])
             back_d = date.fromisoformat(r["back_date"])
-            og = cfg.origin(r["origin"])
             nights = (back_d - out_d).days
-            logistics = og.logistics_eur(nights) if og else 0
+            costs = opp.row_costs(cfg, r, nights)
             sd_b, sd_a = h.school_days_breakdown(out_d, back_d, cfg.public_holidays)
-            overnight = opp._col(r, "layover_overnight")
             pairs.append({
                 "origin": r["origin"], "out_date": r["out_date"],
                 "back_date": r["back_date"], "nights": nights,
-                "flights_eur": r["estimated_family_eur"],
-                # same definition as the headline — the ladder and the date
-                # grid used to omit the layover hotel and so disagreed with it
-                "effective_eur": opp.effective_cost(
-                    cfg, r["estimated_family_eur"], logistics, overnight),
-                "layover_hotel_eur": opp.layover_hotel_eur(cfg, overnight) or None,
+                "from_night": r["_from_night"],
+                "flights_eur": costs["flights_eur"],
+                "effective_eur": costs["effective_eur"],
+                "layover_hotel_eur": costs["layover_hotel_eur"],
+                "origin_hotel_eur": costs["origin_hotel_eur"],
                 "max_layover_h": opp._col(r, "max_layover_h"),
                 "layover_label": opp._col(r, "layover_label"),
                 "school_days": sd_b + sd_a, "school_before": sd_b,

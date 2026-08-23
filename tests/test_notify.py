@@ -262,14 +262,21 @@ def test_a_single_find_keeps_its_own_headline(cfg, tmp_path):
     assert payload["title"].startswith("Málaga")
 
 
-def test_a_failed_digest_keeps_the_queue_for_the_next_morning(cfg, tmp_path):
+def test_a_failed_digest_keeps_the_queue_and_reports_the_failure(cfg, tmp_path):
+    """It must RAISE, not return None.
+
+    Returning None was indistinguishable from "nothing to send", so the
+    daemon recorded the morning as done with alerts still pending and never
+    performed the retry it promises.
+    """
     conn = dbm.init_db(tmp_path / "n.db")
     h = cfg.holiday("autumn-2026")
     _seed(conn, cfg, "AGP", 350.0, "2026-08-23")
     notify.queue(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"),
                  "2026-08-23", log=lambda *_: None)
-    assert notify.deliver(cfg, conn, url="http://ha/hook", poster=Spy(fail=True),
-                          log=lambda *_: None) is None
+    with pytest.raises(notify.NotifyError):
+        notify.deliver(cfg, conn, url="http://ha/hook", poster=Spy(fail=True),
+                       log=lambda *_: None)
     assert len(notify.pending(conn)) == 1, "a failed push must not lose alerts"
     spy = Spy()
     assert notify.deliver(cfg, conn, url="http://ha/hook", poster=spy,
@@ -318,35 +325,59 @@ def test_waking_for_the_digest_does_not_arm_the_repricing_run():
     assert which == "nightly" and at.day == 24      # past both -> tomorrow
 
 
-def test_the_new_low_rule_compares_fares_not_mixed_measures(cfg, tmp_path):
-    """The stored series is bare fares; the alert must be judged against it.
+def test_the_new_low_rule_measures_what_the_alert_prints(cfg, tmp_path):
+    """An alert headlining the effective cost must be judged on it.
 
-    Measuring today's fare-plus-logistics against yesterday's bare fare
-    invented drops whenever the winning origin changed and hid real ones
-    behind a EUR 147 RIX handicap.
+    Reviewer's case: the record is a EUR 800 TLL trip. A cheaper RIX FARE
+    arrives, but RIX carries EUR 142 of logistics, so the trip totals EUR 842
+    — EUR 42 dearer. Comparing fares while printing totals announced
+    "lowest we've seen" for a more expensive holiday.
     """
     conn = dbm.init_db(tmp_path / "n.db")
     h = cfg.holiday("autumn-2026")
-    # a steady TLL fare, then RIX undercuts it on the fare but not after
-    # its EUR 147 of logistics
-    for night, price in (("2026-08-21", 900.0), ("2026-08-22", 900.0)):
-        _seed(conn, cfg, "AGP", price, night)
+    _seed(conn, cfg, "AGP", 800.0, "2026-08-22")                  # TLL, no logistics
     spy = Spy()
-    _seed(conn, cfg, "AGP", 880.0, "2026-08-23", origin="RIX")   # -20 only
+    _seed(conn, cfg, "AGP", 700.0, "2026-08-23", origin="RIX")    # cheaper fare...
     notify.send(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"), "2026-08-23",
                 url="http://ha/hook", poster=spy, log=lambda *_: None)
     lows = [c for _, c in spy.calls if c["kind"] == notify.KIND_LOW]
-    assert lows == [], "EUR 20 off the fare is under the floor, wherever it flies"
+    assert lows == [], "a dearer trip is not a new low, however cheap its fare"
 
-    _seed(conn, cfg, "AGP", 700.0, "2026-08-24", origin="RIX")   # a real drop
+    # A genuine improvement on the TOTAL does speak. Kept above the buy
+    # threshold so this exercises new_low rather than the buy rule, which
+    # fires first and takes the destination's one slot for the run.
+    _seed(conn, cfg, "AGP", 700.0, "2026-08-24")                  # TLL again
     spy2 = Spy()
     notify.send(cfg, conn, h, _items(cfg, conn, h, "2026-08-24"), "2026-08-24",
                 url="http://ha/hook", poster=spy2, log=lambda *_: None,
                 now=NOW + timedelta(days=1))
     lows = [c for _, c in spy2.calls if c["kind"] == notify.KIND_LOW]
     assert len(lows) == 1
-    assert lows[0]["previous_eur"] == 880.0        # the fare it beat
-    assert lows[0]["flights_eur"] == 700.0
+    assert lows[0]["effective_eur"] == 700.0
+    assert lows[0]["previous_eur"] == 800.0    # the total it beat, not a fare
+
+
+def test_a_carried_over_price_never_buzzes_a_phone(cfg, tmp_path):
+    """Stale data may be SHOWN — the UI labels it — but not pushed.
+
+    A provider outage left yesterday's EUR 400 AGP as the best option, and
+    the alerting treated it as tonight's find and sent a buy alert for a fare
+    nobody had re-checked.
+    """
+    conn = dbm.init_db(tmp_path / "n.db")
+    h = cfg.holiday("autumn-2026")
+    _seed(conn, cfg, "AGP", 400.0, "2026-08-22")
+    _seed(conn, cfg, "BCN", 900.0, "2026-08-23")     # only BCN refreshes
+    items = _items(cfg, conn, h, "2026-08-23")
+    agp = next(i for i in items if i["destination"] == "AGP")
+    assert agp["best_option"]["from_night"] == "2026-08-22", "fixture premise"
+
+    spy = Spy()
+    notify.send(cfg, conn, h, items, "2026-08-23", url="http://ha/hook",
+                poster=spy, log=lambda *_: None)
+    assert all(c["destination"] != "AGP" for _, c in spy.calls), \
+        "a price nobody re-checked tonight must not reach a phone"
+
 
 
 def test_a_queued_alert_expires_rather_than_announcing_a_dead_price(cfg, tmp_path):
@@ -374,3 +405,85 @@ def test_a_queued_alert_expires_rather_than_announcing_a_dead_price(cfg, tmp_pat
     assert notify.pending(conn) == []
     assert conn.execute("SELECT COUNT(*) c FROM alerts WHERE status='expired'"
                         ).fetchone()["c"] == 2
+
+
+def test_a_missing_webhook_is_a_failure_not_a_completed_delivery(cfg, tmp_path,
+                                                                 monkeypatch):
+    """Otherwise a webhook configured later never flushes the backlog."""
+    monkeypatch.delenv(notify.WEBHOOK_ENV, raising=False)
+    conn = dbm.init_db(tmp_path / "n.db")
+    h = cfg.holiday("autumn-2026")
+    _seed(conn, cfg, "AGP", 350.0, "2026-08-23")
+    notify.queue(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"),
+                 "2026-08-23", log=lambda *_: None)
+    with pytest.raises(notify.NotifyError):
+        notify.deliver(cfg, conn, log=lambda *_: None)
+    assert len(notify.pending(conn)) == 1
+
+
+def test_the_daemon_does_not_mark_a_failed_morning_as_done(cfg, tmp_path):
+    from app import daemon
+    conn = dbm.init_db(tmp_path / "n.db")
+    h = cfg.holiday("autumn-2026")
+    _seed(conn, cfg, "AGP", 350.0, "2026-08-23")
+    notify.queue(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"),
+                 "2026-08-23", log=lambda *_: None)
+    conn.close()
+    with pytest.raises(notify.NotifyError):
+        daemon.deliver_alerts(cfg, tmp_path / "n.db", "2026-08-23",
+                              log=lambda *_: None)
+    conn = dbm.init_db(tmp_path / "n.db")
+    assert not daemon.already_ran(conn, "2026-08-23", kind="alerts"), \
+        "an unsent digest must leave the slot open for the retry"
+
+
+def test_an_expired_alert_does_not_silence_a_fresh_one(cfg, tmp_path):
+    """A message nobody received cannot be the reason for saying nothing."""
+    conn = dbm.init_db(tmp_path / "n.db")
+    h = cfg.holiday("autumn-2026")
+    _seed(conn, cfg, "AGP", 350.0, "2026-08-23")
+    notify.queue(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"),
+                 "2026-08-23", log=lambda *_: None)
+    conn.execute("UPDATE alerts SET status='expired' WHERE status='pending'")
+    conn.commit()
+    _seed(conn, cfg, "AGP", 350.0, "2026-08-24")
+    spy = Spy()
+    notify.send(cfg, conn, h, _items(cfg, conn, h, "2026-08-24"), "2026-08-24",
+                url="http://ha/hook", poster=spy, log=lambda *_: None,
+                now=NOW + timedelta(days=1))
+    assert [c["destination"] for _, c in spy.calls] == ["AGP"]
+
+
+def test_the_payload_components_sum_to_the_price_it_advertises(cfg, tmp_path):
+    """Every cost the effective price contains must be in the payload.
+
+    The origin hotel was missing from both the alert fields and the detail
+    line, so the components a reader could see did not add up to the number
+    in the headline.
+    """
+    conn = dbm.init_db(tmp_path / "n.db")
+    h = cfg.holiday("autumn-2026")
+    o = Observation(origin="HEL", destination="AGP",
+                    out_date=date(2026, 10, 26), back_date=date(2026, 11, 1),
+                    price_adult_eur=50.0, source="ryanair", observed_at=NOW,
+                    price_basis="quoted_rt", estimated_family_eur=200.0,
+                    is_direct=True,
+                    raw={"airlines": ["Ryanair"],
+                         "times": {"out_departure": "2026-10-26T10:00",
+                                   "out_arrival": "2026-10-26T14:00",
+                                   "in_departure": "2026-11-01T19:00",
+                                   "in_arrival": "2026-11-01T23:55"}})
+    dbm.upsert_observations(conn, h.id, [o], seats=4, night="2026-08-23")
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "HEL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "covered_direct"}])
+    spy = Spy()
+    notify.send(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"), "2026-08-23",
+                url="http://ha/hook", poster=spy, log=lambda *_: None)
+    p = spy.calls[0][1]
+    assert p["origin_hotel_eur"] == cfg.origin("HEL").hotel_eur
+    assert "hotel night" in p["detail"]
+    components = (p["flights_eur"] + (p["logistics_eur"] or 0)
+                  + (p["layover_hotel_eur"] or 0) + (p["origin_hotel_eur"] or 0))
+    assert round(components, 2) == p["effective_eur"]

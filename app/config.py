@@ -40,25 +40,27 @@ class Origin:
     hotel_eur: float = 0.0             # CONDITIONAL night: early/late flight;
                                        # applied at verify (stage A lacks times)
     hotel_if_departure_before: str = ""   # "HH:MM"; empty = never
-    hotel_if_arrival_after: str = ""      # "HH:MM"; empty = never
+    hotel_if_arrival_after: str = ""      # "HH:MM"; window START, empty = never
+    hotel_night_ends: str = "06:00"       # window END, the morning it is fine again
 
     def hotel_needed(self, out_departure: str | None,
                      in_arrival: str | None) -> bool:
         """Does this origin force a hotel night for these clock times?
 
-        Riga is drivable overnight, Helsinki is not — the rules encode that.
+        The arrival rule is a WINDOW, not a "later than". A plain `arrival >
+        02:30` billed a room for landing at 14:00, while Helsinki's `> 21:00`
+        missed a 01:00 landing entirely — the ferry is just as gone at one in
+        the morning as at ten at night. The window wraps midnight, so HEL's
+        21:00–06:00 catches both and RIX's 02:30–06:00 stays the narrow
+        night-drive exception the config describes.
+
         Returns False when the times are unknown, so an unverified itinerary
         is never charged for a room it might not need; the UI still shows the
         amount as a risk.
         """
-        def _before(t: str | None, limit: str) -> bool:
-            return bool(limit and t and str(t)[11:16] < limit)
-
-        def _after(t: str | None, limit: str) -> bool:
-            return bool(limit and t and str(t)[11:16] > limit)
-
         return (_before(out_departure, self.hotel_if_departure_before)
-                or _after(in_arrival, self.hotel_if_arrival_after))
+                or _in_night_window(in_arrival, self.hotel_if_arrival_after,
+                                    self.hotel_night_ends))
     extra_time_h: float = 0.0          # displayed only — never auto-priced
     note: str = ""
 
@@ -100,6 +102,28 @@ class ClimateRule:
 class Tier:
     notify_eur: float
     super_eur: float
+
+
+def _clock(t: str | None) -> str | None:
+    """"2026-10-26T23:55" -> "23:55"; anything unparseable -> None."""
+    if not t:
+        return None
+    c = str(t)[11:16]
+    return c if len(c) == 5 and c[2] == ":" else None
+
+
+def _before(t: str | None, limit: str) -> bool:
+    c = _clock(t)
+    return bool(limit and c and c < limit)
+
+
+def _in_night_window(t: str | None, start: str, end: str) -> bool:
+    """Is this clock time inside a window that may wrap past midnight?"""
+    c = _clock(t)
+    if not (start and c):
+        return False
+    end = end or "06:00"
+    return (start < c < end) if start <= end else (c > start or c < end)
 
 
 @dataclass(frozen=True)
@@ -196,6 +220,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
                         hotel_eur=float(o.get("hotel_eur", 0)),
                         hotel_if_departure_before=str(o.get("hotel_if_departure_before", "")),
                         hotel_if_arrival_after=str(o.get("hotel_if_arrival_after", "")),
+                        hotel_night_ends=str(o.get("hotel_night_ends", "06:00")),
                         extra_time_h=float(o.get("extra_time_h", 0)),
                         note=o.get("note", ""))
                  for o in raw.get("origins", [])],

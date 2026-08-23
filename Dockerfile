@@ -11,8 +11,14 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates tzdata curl \
  && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# The hashed lock, not the loose list: a rebuild must get the same parser and
+# the same web stack it got yesterday. Direct pins alone left starlette,
+# pydantic, selectolax, primp and protobuf free to move under us, and
+# fast-flights parses scraped HTML — a silent minor bump there changes what a
+# "price" is. Regenerate with:
+#   pip-compile --generate-hashes --output-file=requirements.lock requirements.txt
+COPY requirements.lock .
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 COPY app/ ./app/
 COPY config.yaml .

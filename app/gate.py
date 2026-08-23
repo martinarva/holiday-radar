@@ -25,7 +25,21 @@ class Check:
 
 
 def run_checks(cfg: Config, db_path, min_runs: int = 3,
-               discovery_cap: int = 30, audit_cap: int = 2) -> list[Check]:
+               discovery_cap: int | None = None,
+               audit_cap: int | None = None) -> list[Check]:
+    """Soak-gate checks.
+
+    The caps default to what this deployment is actually configured to do.
+    Hardcoding 30/2 pre-dated the owner's move to full-grid sampling
+    (`google_budget: 0` = unmetered, `audit_budget: 6`), so the gate failed
+    every night for doing exactly what it was told to.
+    """
+    sampler = cfg.sampler or {}
+    if discovery_cap is None:
+        budget = int(sampler.get("google_budget") or 0)
+        discovery_cap = budget or None      # 0 = deliberately unmetered
+    if audit_cap is None:
+        audit_cap = int(sampler.get("audit_budget") or 2)
     conn = dbm.init_db(db_path)
     checks: list[Check] = []
     runs = [dict(r) for r in conn.execute(
@@ -36,10 +50,15 @@ def run_checks(cfg: Config, db_path, min_runs: int = 3,
         "≥3 scheduled nightly runs", len(runs) >= min_runs,
         f"{len(runs)} nightly runs recorded"))
 
-    over = [s for s in summaries if s.get("discovery_used", 0) > discovery_cap]
-    checks.append(Check(
-        f"discovery ≤{discovery_cap}/run", not over,
-        f"max {max((s.get('discovery_used', 0) for s in summaries), default=0)}"))
+    peak = max((s.get("discovery_used", 0) for s in summaries), default=0)
+    if discovery_cap is None:
+        checks.append(Check(
+            "discovery budget unmetered (full grid, by configuration)", True,
+            f"peak {peak} queries/run"))
+    else:
+        over = [s for s in summaries if s.get("discovery_used", 0) > discovery_cap]
+        checks.append(Check(f"discovery ≤{discovery_cap}/run", not over,
+                            f"max {peak}"))
 
     over_a = [s for s in summaries if s.get("audit_used", 0) > audit_cap]
     checks.append(Check(
@@ -51,11 +70,14 @@ def run_checks(cfg: Config, db_path, min_runs: int = 3,
         "each run wrote its own night", len(nights) == len(runs),
         f"{len(nights)} distinct nights / {len(runs)} runs"))
 
+    # observation_role is part of the key: a discovery row and the audit that
+    # re-quotes it are two legitimate rows, not a duplicate. Omitting it here
+    # made every audited pair fail the gate.
     dupes = conn.execute("""
         SELECT COUNT(*) c FROM (
           SELECT holiday_id, origin, destination, source, out_date, back_date,
-                 observed_night, COUNT(*) n FROM observations
-          GROUP BY 1,2,3,4,5,6,7 HAVING n > 1)""").fetchone()["c"]
+                 observed_night, observation_role, COUNT(*) n FROM observations
+          GROUP BY 1,2,3,4,5,6,7,8 HAVING n > 1)""").fetchone()["c"]
     checks.append(Check("zero duplicate observations", dupes == 0,
                         f"{dupes} duplicate keys"))
 
@@ -109,13 +131,16 @@ def run_checks(cfg: Config, db_path, min_runs: int = 3,
     theoretical = (len(cfg.active_holidays()) * len(cfg.origins)
                    * len(cfg.destinations))
     s, _, _ = compute_metrics(cfg, hols, relevant, date.today(), theoretical)
-    inv = (s["covered_direct"] + s["covered_1stop"]
-           == s["airbaltic_covered"] + s["ryanair_covered"] - s["overlap"])
+    # Every admitted carrier counts. Omitting Wizz made a watch it covered
+    # look like an unexplained "covered" row and broke the identity.
+    carriers = (s["airbaltic_covered"] + s["ryanair_covered"]
+                + s.get("wizzair_covered", 0) - s["overlap"])
+    inv = s["covered_direct"] + s["covered_1stop"] == carriers
     checks.append(Check(
         "DB-only coverage invariants hold", inv,
         f"direct {s['covered_direct']} + 1stop {s['covered_1stop']} vs "
-        f"bt {s['airbaltic_covered']} + ry {s['ryanair_covered']} - "
-        f"overlap {s['overlap']}"))
+        f"bt {s['airbaltic_covered']} + ry {s['ryanair_covered']} + "
+        f"wz {s.get('wizzair_covered', 0)} - overlap {s['overlap']}"))
 
     conn.close()
     return checks

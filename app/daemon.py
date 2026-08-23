@@ -85,6 +85,9 @@ def deliver_alerts(cfg: Config, db_path, night: str, log=print) -> dict:
     conn = dbm.init_db(db_path)
     try:
         waiting = len(notify.pending(conn))
+        # A NotifyError propagates on purpose: recording the slot after a
+        # failed webhook marked the morning done with alerts still pending
+        # and delivered=0, so the promised retry never happened.
         payload = notify.deliver(cfg, conn, log=log)
         summary = {"night": night, "queued": waiting,
                    "delivered": (payload or {}).get("count", 0)}

@@ -244,6 +244,9 @@ MIGRATIONS: list[tuple[str, str]] = [
         CREATE UNIQUE INDEX ux_offers_key ON offers
         (holiday_id, origin, destination, out_date, back_date,
          observed_night, source, offer_rank, observation_role)"""),
+
+    ("0037_observation_layover_certain", """
+        ALTER TABLE observations ADD COLUMN layover_certain INTEGER"""),
 ]
 
 # source -> operating carrier when the source implies it
@@ -272,12 +275,18 @@ def layover_of(o: Observation) -> dict:
     legs = (o.raw or {}).get("leg_details") or []
     if len(legs) < 2:
         return {"max_layover_h": None, "layover_label": None,
-                "layover_overnight": None}
+                "layover_overnight": None, "layover_certain": None}
     s = itinerary.summarize(legs)
+    # `certain` has to survive the round trip. Storing only the known maximum
+    # threw the uncertainty away, so a connection whose second gap was
+    # unreadable came back out of the database as a comfortable 2 h change —
+    # and the production ranker went on making the very mistake
+    # itinerary.py had just been fixed to avoid.
     return {"max_layover_h": s["max_layover_h"],
             "layover_label": s["layover_label"],
             "layover_overnight": None if s["max_layover_h"] is None
-            else int(s["overnight"])}
+            else int(s["overnight"]),
+            "layover_certain": int(s["certain"])}
 
 
 def airlines_of(o: Observation) -> list[str]:
@@ -334,8 +343,9 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
                source_price, estimated_family_eur, is_direct, confidence,
                freshness_hours, days_to_departure, raw_json, observation_role,
                airlines, out_departure, out_arrival, in_departure, in_arrival,
-               max_layover_h, layover_label, layover_overnight)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               max_layover_h, layover_label, layover_overnight,
+               layover_certain)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             -- observation_role is part of the key: an audit re-quote of the
             -- same pair must sit BESIDE its discovery row, not replace it.
             -- Without it the audit overwrote the very row it was measuring,
@@ -361,7 +371,8 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               in_arrival=excluded.in_arrival,
               max_layover_h=excluded.max_layover_h,
               layover_label=excluded.layover_label,
-              layover_overnight=excluded.layover_overnight
+              layover_overnight=excluded.layover_overnight,
+              layover_certain=excluded.layover_certain
         """, (holiday_id, o.origin, o.destination, o.source,
               o.out_date.isoformat(), o.back_date.isoformat(),
               row_night, o.observed_at.isoformat(),
@@ -374,7 +385,8 @@ def upsert_observations(conn: sqlite3.Connection, holiday_id: str,
               *(times_of(o)[k] for k in ("out_departure", "out_arrival",
                                          "in_departure", "in_arrival")),
               *(layover_of(o)[k] for k in ("max_layover_h", "layover_label",
-                                           "layover_overnight"))))
+                                           "layover_overnight",
+                                           "layover_certain"))))
         n += 1
     conn.commit()
     return n
@@ -522,7 +534,13 @@ def insert_verification(conn: sqlite3.Connection, *, holiday_id: str,
                         origin: str, destination: str, out_date: str,
                         back_date: str, price_total_eur: float | None,
                         airlines: str, legs: str, level: str, reason: str,
-                        indicative_family_eur: float | None) -> None:
+                        indicative_family_eur: float | None,
+                        night: str | None = None) -> None:
+    """`night` is the run's LOCAL date, same as observations and offers.
+
+    Deriving it from UTC left verifications filed under a different night
+    from the very rows they verify whenever the run straddles midnight UTC.
+    """
     now = datetime.now(UTC)
     conn.execute("""
         INSERT INTO verifications
@@ -531,7 +549,7 @@ def insert_verification(conn: sqlite3.Connection, *, holiday_id: str,
            level, reason, indicative_family_eur)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (holiday_id, origin, destination, out_date, back_date,
-          now.date().isoformat(), now.isoformat(), price_total_eur,
+          night or now.date().isoformat(), now.isoformat(), price_total_eur,
           airlines, legs, level, reason, indicative_family_eur))
     conn.commit()
 

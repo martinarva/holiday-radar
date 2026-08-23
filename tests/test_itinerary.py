@@ -140,3 +140,39 @@ def test_wizz_respects_the_holiday_nights_bounds(holiday_autumn):
     data = _timetable([("2026-10-23", 55.99, "22:20")],
                       [("2026-10-24", 45.99, "06:10")])       # 1 night only
     assert wizzair.parse_timetable(data, "TLL", "TIA", holiday_autumn) == []
+
+
+def test_uncertainty_survives_the_database_round_trip():
+    """The partial-parse fix is worthless if the DB drops the fact.
+
+    Storing only the known maximum brought a connection whose second gap was
+    unreadable back out as a comfortable 2 h change, so the production ranker
+    kept making the exact mistake this module was fixed to prevent.
+    """
+    from datetime import date
+
+    from app import db as dbm
+    from app import opportunity as opp
+    from app.providers.base import Observation
+
+    conn = dbm.init_db(":memory:")
+    o = Observation(origin="TLL", destination="TIA",
+                    out_date=date(2026, 10, 26), back_date=date(2026, 11, 1),
+                    price_adult_eur=200.0, source="google_flights",
+                    estimated_family_eur=800.0, is_direct=False,
+                    raw={"leg_details": [
+                        _leg("TLL", "WAW", "2026-10-26T06:00", "2026-10-26T08:00"),
+                        _leg("WAW", "MUC", "2026-10-26T10:00", None),
+                        _leg("MUC", "TIA", None, "2026-10-27T09:00")]})
+    dbm.upsert_observations(conn, "autumn-2026", [o], seats=4,
+                            night="2026-08-23")
+    row = conn.execute("SELECT max_layover_h, layover_certain "
+                       "FROM observations").fetchone()
+    assert row["max_layover_h"] == 2.0
+    assert row["layover_certain"] == 0, "the unreadable gap must be recorded"
+
+    # and the ranker must read it back as uncertain, not as a clean 2 h change
+    assert it.score_for_hours(2.0, certain=True) == 9.0
+    assert it.score_for_hours(2.0, certain=False) <= 6.0
+    assert (opp._itinerary_score(False, 1, it.score_for_hours(2.0, False))
+            < opp._itinerary_score(False, 1, it.score_for_hours(2.0, True)))

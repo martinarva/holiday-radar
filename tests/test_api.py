@@ -132,3 +132,46 @@ def test_no_untrusted_field_is_interpolated_without_escaping():
     esc_line = next(ln for ln in html.splitlines() if "const ESCAPES" in ln)
     for ch in ('"', "'"):
         assert ch in esc_line, f"esc() must handle {ch!r}"
+
+
+def test_the_detail_view_agrees_with_the_card_that_links_to_it(tmp_path):
+    """Same freshness rule and same cost definition, or the page lies.
+
+    The detail row printed EUR 620 for a HEL trip whose card said EUR 710
+    (no origin hotel), and a carried-over price the card happily showed came
+    back as an empty date grid because the detail query only read tonight.
+    """
+    from datetime import date
+
+    from app import db as dbm
+    from app import opportunity as opp
+    from app.providers.base import Observation
+
+    cfg = load_config(ROOT / "config.yaml")
+    conn = dbm.init_db(tmp_path / "d.db")
+    h = cfg.holiday("autumn-2026")
+    o = Observation(origin="HEL", destination="AGP",
+                    out_date=date(2026, 10, 25), back_date=date(2026, 11, 1),
+                    price_adult_eur=100.0, source="ryanair",
+                    price_basis="quoted_rt", estimated_family_eur=400.0,
+                    is_direct=True,
+                    raw={"times": {"out_departure": "2026-10-25T10:00",
+                                   "out_arrival": "2026-10-25T14:00",
+                                   "in_departure": "2026-11-01T19:00",
+                                   "in_arrival": "2026-11-01T23:55"}})
+    # observed YESTERDAY: the detail view must still show it
+    dbm.upsert_observations(conn, h.id, [o], seats=4, night="2026-08-22")
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "HEL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "covered_direct"}])
+
+    card = opp.build(cfg, conn, h, night="2026-08-22",
+                     climate_cache={})[0]["best_option"]
+    rows = opp.latest_priced_rows(conn, h.id, "2026-08-23", "AGP")
+    assert rows, "a carried-over price must not empty the detail view"
+    detail = opp.row_costs(cfg, rows[0], rows[0]["nights"]
+                           if "nights" in rows[0] else 7)
+    assert detail["effective_eur"] == card["effective_eur"]
+    assert detail["origin_hotel_eur"] == card["origin_hotel_eur"]
+    assert rows[0]["_from_night"] == "2026-08-22"
