@@ -158,8 +158,9 @@ docker exec holiday-radar-web python -m app.cli test-alert
 
 The live instance already has this wired: automation
 `automation.holiday_radar_lennupakkumised` (id `holiday_radar_deal`) with a
-webhook trigger, notifying `notify.mobile_app_martins_iphone` and deep-linking
-to `radar.arvahome.org`. Because Home Assistant and the radar share the docker
+webhook trigger, notifying `notify.mobile_app_martins_iphone` and
+`notify.mobile_app_ene_s_iphone` in parallel — the trip is a joint decision —
+and deep-linking to `radar.arvahome.org`. Because Home Assistant and the radar share the docker
 host, `.env` points at the LAN address (`http://192.168.1.35:8123/api/webhook/...`),
 which keeps `local_only: true` valid on the trigger.
 
