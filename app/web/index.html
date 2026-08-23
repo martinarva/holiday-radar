@@ -90,6 +90,22 @@ th{text-align:left;font-weight:500;color:var(--mut);font-size:12px;
   text-transform:uppercase;letter-spacing:.05em;padding:6px 10px;
   border-bottom:1px solid var(--line);white-space:nowrap}
 td{padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+/* nowrap keeps numbers and dates in one piece, but a prose cell should give
+   way before the column that matters does — the Providers card was scrolling
+   its status pills out of sight to keep "stage-A carrier (TLL only)" on one
+   line. */
+td.wrap{white-space:normal}
+/* A status column should hug its pill and let the prose beside it take the
+   rest; without a width it competed for space and the pill dropped onto its
+   own line. */
+td.hug{width:1%;white-space:nowrap;vertical-align:middle}
+/* Name-and-detail on the left, a status on the right. A three-column table
+   could not do this inside a third-of-the-page card: it either scrolled the
+   status out of sight or, once allowed to wrap, grew each row to ~190px. */
+.list>.line{display:flex;align-items:center;justify-content:space-between;
+  gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+.list>.line:last-child{border-bottom:0}
+.list>.line>:first-child{min-width:0}
 tr:last-child td{border-bottom:0}
 td.n,th.n{text-align:right}
 .scroll{overflow-x:auto}
@@ -718,10 +734,11 @@ async function viewSystem(el){
     <div class="card"><h3>Observations by source</h3>
       <table><tbody>${Object.entries(s.observations_by_source)
         .map(([k,c])=>`<tr><td>${esc(k)}</td><td class="n price">${c}</td></tr>`).join("")}</tbody></table></div>
-    <div class="card"><h3>Providers</h3>
-      <table><tbody>${s.providers.map(p=>`<tr><td>${esc(p.name)}</td>
-        <td class="mut small">${esc(p.role)}</td>
-        <td class="n"><span class="pill ${p.state==="healthy"?"good":p.state==="disabled"?"grey":"info"}">${p.state}</span></td></tr>`).join("")}</tbody></table></div>
+    <div class="card"><h3>Providers</h3><div class="list">${
+      s.providers.map(p=>`<div class="line">
+        <div><div>${esc(p.name)}</div><div class="mut small">${esc(p.role)}</div></div>
+        <span class="pill ${p.state==="healthy"?"good":p.state==="disabled"?"grey":"info"}">${p.state}</span>
+      </div>`).join("")}</div></div>
   </div>`));
 
   el.append($(`<h2>Coverage per holiday</h2>`));
