@@ -126,6 +126,8 @@ async function load(){
       const hparts = [];
       if(og.handicap_fixed_eur) hparts.push(`fixed ${og.handicap_fixed_eur} €`);
       if(og.handicap_per_day_eur) hparts.push(`parking ${og.handicap_per_day_eur} €/day`);
+      if(og.hotel_eur) hparts.push(
+        `(+${og.hotel_eur} € hotel if dep &lt; ${og.hotel_if_departure_before || "?"} or arr &gt; ${og.hotel_if_arrival_after || "?"} — applied at verify)`);
       const hcap = hparts.length
         ? ` · logistics: ${hparts.join(" + ")} · ~+${og.extra_time_h} h` : "";
       const body = rows.map(r => `

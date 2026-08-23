@@ -40,10 +40,15 @@ def test_public_holidays_loaded(cfg):
 def test_origins_with_trip_length_aware_handicaps(cfg):
     assert [o.code for o in cfg.origins] == ["TLL", "HEL", "RIX"]
     hel = cfg.origin("HEL")
-    assert hel.handicap_fixed_eur == 120 and hel.handicap_per_day_eur == 0
+    # ferry family 2+2 RT ~150 + Bolt x2 ~70 (prices checked 2026-08-23)
+    assert hel.handicap_fixed_eur == 220 and hel.handicap_per_day_eur == 0
+    assert hel.hotel_eur == 90 and hel.hotel_if_departure_before == "12:00"
     rix = cfg.origin("RIX")
     # fuel 620 km @ 10 l/100 @ 1.70 EUR/l ~= 105 + first-day parking surcharge 2
     assert rix.handicap_fixed_eur == 107 and rix.handicap_per_day_eur == 5
+    # RIX hotel is a narrow edge case: ~06:00 departure or ~03:00 arrival
+    assert rix.hotel_eur == 110 and rix.hotel_if_departure_before == "07:00"
+    assert rix.hotel_if_arrival_after == "02:30"
     # 10 nights = 11 trip days: 107 + 5*11 = 162
     assert rix.logistics_eur(10) == 162
     assert cfg.origin("TLL").logistics_eur(10) == 0

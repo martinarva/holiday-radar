@@ -35,8 +35,12 @@ def _as_date(v) -> date:
 @dataclass(frozen=True)
 class Origin:
     code: str
-    handicap_fixed_eur: float = 0.0    # one-off logistics (fuel, ferry)
+    handicap_fixed_eur: float = 0.0    # one-off logistics (fuel, ferry, taxi)
     handicap_per_day_eur: float = 0.0  # per trip day (airport parking)
+    hotel_eur: float = 0.0             # CONDITIONAL night: early/late flight;
+                                       # applied at verify (stage A lacks times)
+    hotel_if_departure_before: str = ""   # "HH:MM"; empty = never
+    hotel_if_arrival_after: str = ""      # "HH:MM"; empty = never
     extra_time_h: float = 0.0          # displayed only — never auto-priced
     note: str = ""
 
@@ -167,6 +171,9 @@ def load_config(path: str | Path = "config.yaml") -> Config:
                         handicap_fixed_eur=float(o.get("handicap_fixed_eur",
                                                        o.get("handicap_eur", 0))),
                         handicap_per_day_eur=float(o.get("handicap_per_day_eur", 0)),
+                        hotel_eur=float(o.get("hotel_eur", 0)),
+                        hotel_if_departure_before=str(o.get("hotel_if_departure_before", "")),
+                        hotel_if_arrival_after=str(o.get("hotel_if_arrival_after", "")),
                         extra_time_h=float(o.get("extra_time_h", 0)),
                         note=o.get("note", ""))
                  for o in raw.get("origins", [])],

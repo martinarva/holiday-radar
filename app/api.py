@@ -136,6 +136,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 "origins": [{"code": o.code,
                              "handicap_fixed_eur": o.handicap_fixed_eur,
                              "handicap_per_day_eur": o.handicap_per_day_eur,
+                             "hotel_eur": o.hotel_eur,
+                             "hotel_if_departure_before": o.hotel_if_departure_before,
+                             "hotel_if_arrival_after": o.hotel_if_arrival_after,
                              "extra_time_h": o.extra_time_h, "note": o.note}
                             for o in cfg.origins],
                 "holidays": out}
