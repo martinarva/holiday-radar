@@ -1,145 +1,171 @@
 # holiday-radar
 
-**A school-holiday flight deal radar.** Watches flight prices from your home
-airports to climate-appropriate, family-friendly destinations during school
-holidays — and alerts you (via Home Assistant/MQTT) when a price drops into
-buying range.
+**A school-holiday flight deal radar.** It watches flight prices from your
+home airports to climate-appropriate, family-friendly destinations across
+upcoming school holidays, and tells you when something is genuinely worth
+buying — as a family total, with the logistics of each home airport and the
+school days a trip would cost included honestly.
 
-School-holiday flights are notoriously expensive, but with a long lead time
-and daily watching you can catch the dips. This tool automates exactly that:
+It is deliberately **not a flight search**. It never asks *from / to / when*;
+it already knows the school calendar, the family, the allowed date
+flexibility and what each home airport costs to reach, so it answers the
+question a parent actually has:
 
-- **Holidays, not dates.** You configure school breaks (an Estonian
-  2026–2030 preset ships in [`presets/holidays_ee.yaml`](presets/holidays_ee.yaml));
-  the radar searches a **flexible window** (±2–3 days around each break) and
-  honestly flags dates that would cost school days (🏫 +N).
-- **Climate picks the destinations.** A curated pool of ~40 airports is
-  filtered by monthly climate normals (Open-Meteo, free): *"beach: ≥23 °C,
-  sea ≥21 °C, ≤8 rain days"* → autumn = the whole Mediterranean; February =
-  Canaries/Egypt/long-haul. No hand-picking, but you can pin/exclude.
-- **Family totals.** Prices are shown as the family total (e.g. 2 adults +
-  2 children), not the seductive per-adult teaser.
-- **Multiple origins, honest comparison.** e.g. TLL + HEL + RIX with
-  configurable logistics handicaps (ferry/drive cost) applied in ranking.
-
-## How it works — a two-stage funnel
-
-Naive per-date searching would need thousands of API calls a day. Instead:
+> **Where should we go on the next school holiday, and is now a good time to book?**
 
 ```
-STAGE A — RADAR (wide & cheap, nightly)
-  carrier fare calendars, ONE request covers a whole date window:
-  airBaltic /api/fsf (per-day prices + direct flag, both directions)
-  + Ryanair fare finder (cheapest RT per destination in window)
-  + budget-based Google sampler for watches the carriers don't cover
-        │ threshold / vs-history deal score
-        ▼
-STAGE B — VERIFY (narrow & precise, top candidates only)
-  real search on the exact best date pairs via Google Flights
-  (fast-flights; hosted SERP APIs as backup) → exact family price
-        ▼
-ALERT → MQTT/Home Assistant + dashboard + price history (SQLite)
+Christmas break 2026/27 · 21 Dec – 3 Jan
+Barcelona                                        fair price
+€515 effective family cost
+☀ 15° · 🌧 6 d/mo · warm city
+20 Dec → 3 Jan · 14 nights · TLL · nonstop · Ryanair · ✓ 0 school days
+Other origins: RIX €630 direct ✓0 · HEL €1,016 1+ stop ✓0
 ```
 
-Carrier sources are admitted empirically — the full recon scorecard of 15
-carriers lives in [docs/carrier-recon.md](docs/carrier-recon.md); only
-sources that beat Google sampling on cost survive.
+## What makes it different
 
-Total running cost: **€0** (free tiers and public endpoints, polite volume).
+- **Opportunity, not itinerary.** One destination per holiday, with TLL / HEL
+  / RIX competing *inside* it — because that is the choice a family makes.
+- **Effective family cost.** Fare × the whole family, plus trip-length-aware
+  logistics: a Riga bargain carries fuel and airport parking per day, a
+  Helsinki one carries ferry tickets and taxis, and a conditional hotel night
+  when the flight leaves before the ferry runs. Money and time are shown
+  separately — time is never silently converted into euros.
+- **School days are first-class.** Every option shows how many school days it
+  costs, split before/after the break, computed against the real public
+  holiday calendar. A *price vs school days* ladder makes the trade-off
+  explicit — the radar never decides it for you.
+- **Climate picks the shortlist.** Monthly climatology (Open-Meteo) filters
+  and ranks destinations: warmth saturates at a comfortable ideal rather than
+  rewarding 35 °C, and only cold, rain or a missing sea can rule a place out.
+- **Best ≠ Cheapest, always both.** Two different questions, answered side by
+  side, at destination level *and* at date-pair level.
+
+## How it works
+
+```
+STAGE A — RADAR (nightly, free)
+  airBaltic /api/fsf ....... whole date grids, both directions, per-day prices
+  Ryanair fare finder ...... cheapest RT per destination across a window
+  Google sampler ........... every remaining destination, full date grid,
+                             6 parallel clients (fast-flights)
+        │ deal score: buy thresholds + market history
+        ▼
+STAGE B — VERIFY (top candidates)
+  exact family totals via Google Flights; hosted SERP APIs as backup
+        ▼
+SQLite history → opportunity model → web UI (and Home Assistant alerts, E3)
+```
+
+Running cost: **€0**. Everything uses free, keyless sources; the hosted SERP
+API keys are optional standby.
 
 ## Status
 
-**Early development.** The [project brief](SPEC.md) is final; source viability
-is proven (E0, Aug 2026):
+Working and deployed. E0 (source selection) and E1 (foundation) are closed;
+E2 (pipeline) is in progress.
 
-- ✅ **Carrier recon complete** (15 carriers probed): stage A =
-  **airBaltic + Ryanair + Google sampler**. airBaltic admitted with open
-  JSON endpoints (a year of per-day prices + direct-flag in one request,
-  both directions, plain curl) covering ~60% of watches — from Riga all 26
-  pool destinations are direct. Norwegian/Finnair/Wizz and all connectors
-  not admitted (bot walls or negligible coverage); details in
-  [docs/carrier-recon.md](docs/carrier-recon.md).
-- ✅ Ryanair fare finder & routes — real window prices, keyless
-- ✅ Open-Meteo climate normals — filter mechanism validated
-- ✅ fast-flights (Google Flights) — works from EU IPs after a
-  privacy-preserving consent handshake (built in)
-- ✅ Travelpayouts measured — **not admitted** (E0 gate: 9% in-window
-  coverage; E0.1: cheap hints don't correlate with bookable family prices —
-  mostly virtual-interline artifacts). The adapter stays, strictly optional
-  and off by default.
-- ✅ Hosted SERP-API backups wired for both vendors — SerpApi.com (free
-  250/mo, enough for the whole verify stage) and SearchApi.io — **triple
-  cross-validated** against fast-flights (identical itinerary, identical
-  price from all three)
-- 🔜 E1 (in order): airBaltic pairing spike → airBaltic adapter + Ryanair
-  duration fix → watchlist skeleton → climate scoring → **stage-A dry run**
-  with a full coverage report → E2 radar pipeline → E3 alerts/HA
+- ✅ **Sources chosen by measurement, not assumption** — a 180-watch benchmark
+  rejected Travelpayouts (9 % window coverage, prices that don't correspond to
+  bookable family itineraries), and a 15-carrier recon admitted only airBaltic
+  and Ryanair. See [docs/carrier-recon.md](docs/carrier-recon.md).
+- ✅ **58-destination pool**, destination-driven rather than carrier-driven,
+  checked against the live airBaltic/Ryanair network maps and the published
+  TLL/HEL/RIX schedules.
+- ✅ **Full-grid nightly collection** with per-night history, every airline
+  itinerary stored (not just the cheapest), and flight times captured.
+- ✅ **Web UI**: Radar → Holiday → Opportunity → System.
+- ✅ **Deployed** behind nginx on the home network ([docs/DEPLOY.md](docs/DEPLOY.md)).
+- 🔜 E2-C market score & trends · E3 verification flow, Home Assistant
+  alerts and the Sunday digest · then the 72 h unattended soak gate.
 
-## Quick start (development)
+## Quick start
+
+```bash
+docker compose up -d --build     # web on :8770, scheduler on the nightly cron
+```
+
+or for development:
 
 ```bash
 python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
-./.venv/bin/python -m pytest -q          # unit tests, no network
-cp .env.example .env                      # add TRAVELPAYOUTS_TOKEN if you have one
-
-# inspect configured holidays and their search windows
-./.venv/bin/python -m app.cli holidays
-
-# probe the sources (network):
-./.venv/bin/python -m app.cli probe-ryanair --origin RIX --holiday autumn-2026
-./.venv/bin/python -m app.cli probe-google --origin TLL --dest AGP \
-    --out 2026-10-26 --back 2026-11-01
-./.venv/bin/python -m app.cli probe-travelpayouts --origin TLL --dest AGP \
-    --holiday autumn-2026                 # needs TRAVELPAYOUTS_TOKEN
-
-# the E0 gate (see SPEC §7): coverage + price-error benchmark, ends with
-# a suggested A/B/C call on Travelpayouts as the stage-A source
-./.venv/bin/python -m app.cli benchmark --max-dest 15 --verify-sample 6
+./.venv/bin/python -m pytest -q                 # 69 tests, no network
+./.venv/bin/python -m app.cli holidays          # windows + school-day flags
+./.venv/bin/python -m app.cli nightly           # one collection cycle
+./.venv/bin/python -m app.cli serve             # UI on http://localhost:8765
 ```
+
+Useful commands:
+
+| Command | What |
+|---|---|
+| `holidays` | active breaks, flex windows, school-day examples |
+| `nightly` | one full collection cycle (carriers + sampler + verify hook) |
+| `run-scheduler` | the daemon the container runs (waits for the cron slot) |
+| `coverage-report` | recompute the coverage report from the DB, no network |
+| `dry-run` | full stage-A pass + coverage report |
+| `climate-fetch` | fetch/refresh Open-Meteo normals |
+| `probe-airbaltic` / `probe-ryanair` / `probe-google` | single-source probes |
+| `serve` | UI + JSON API |
 
 ## Configuration
 
-Everything lives in [`config.yaml`](config.yaml) — origins (+handicaps),
-active holidays, climate rules, per-tier price thresholds, providers.
-Secrets (only the Travelpayouts token for now) live in `.env`.
+[`config.yaml`](config.yaml) holds everything: origins with their logistics
+model, active holidays, climate rules, per-tier buy thresholds, sampler
+budgets. Presets carry the reference data —
+[`presets/holidays_ee.yaml`](presets/holidays_ee.yaml) (Estonian school
+holidays and public holidays through 2030, from the regulation) and
+[`presets/destinations.yaml`](presets/destinations.yaml). Point
+`holidays.preset` at your own file to use another country's calendar; the
+code has nothing Estonian in it.
 
-Holiday calendars are presets: see
-[`presets/holidays_ee.yaml`](presets/holidays_ee.yaml) (Estonia, from the
-official regulation, through 2030). Add your own country by writing a similar
-file and pointing `holidays.preset` at it. Destinations:
-[`presets/destinations.yaml`](presets/destinations.yaml).
+Secrets live in `.env` and are all optional (see `.env.example`).
 
-## Data sources & being a good citizen
+## API
+
+The UI is a thin client over a JSON API, so a different front end can replace
+it without touching the backend:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/radar` | home: hero deal, holiday cards, recent movers, health |
+| `GET /api/holidays/{id}/opportunities` | ranked opportunities for one break |
+| `GET /api/opportunities/{holiday}/{dest}` | one destination in full: origins, date matrix, school ladder, history, offers |
+| `GET /api/offers` | every stored itinerary for a watch |
+| `GET /api/verifications` · `/api/audit-deltas` | verification results, carrier-vs-Google deltas |
+| `GET /api/system` · `/health` | diagnostics |
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [SPEC.md](SPEC.md) | the project brief: architecture, decisions and their evidence, stage plan |
+| [docs/UX-SPEC.md](docs/UX-SPEC.md) | the interface specification and its acceptance criteria |
+| [docs/carrier-recon.md](docs/carrier-recon.md) | every carrier probed, why each was admitted or not |
+| [docs/dryrun-report.md](docs/dryrun-report.md) | the E1 coverage milestone, real numbers |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Docker, persistence, scheduling, reverse proxy |
+
+## Sources, and being a good citizen
 
 | Source | Nature | Use |
 |---|---|---|
-| airBaltic `/api/fsf` | open JSON the airline's own site uses (unofficial, not robots-disallowed) | stage-A core: per-day prices + direct flag, both directions, ~60% of watches |
-| Ryanair fare finder | public but unofficial JSON | stage-A: cheapest RT per destination across a window |
-| [fast-flights](https://github.com/AWeirdDev/flights) | Google Flights scraper library | budget-based stage-A sampler for blind watches + stage-B verification |
-| Hosted SERP APIs (SerpApi / SearchApi) | official, keyed | verify reliability backup (free tiers) |
+| airBaltic `/api/fsf` | open JSON their own site uses | stage-A core |
+| Ryanair fare finder | public but unofficial JSON | stage-A |
+| [fast-flights](https://github.com/AWeirdDev/flights) | Google Flights library | sampler + verification |
 | [Open-Meteo](https://open-meteo.com/) | free, keyless | one-off climate normals |
-| [Travelpayouts Data API](https://travelpayouts.github.io/slate/) | official, free token | **optional, off by default** — did not pass the E0 gate |
+| SerpApi / SearchApi | official, keyed | optional verification backup |
+| Travelpayouts | official, keyed | present but **off** — failed the E0 gate |
 
-This is built for **personal, low-frequency** use (one nightly screening
-pass, ≤10 verifications/day). No CAPTCHA solving, no proxy rotation, no
-aggressive retries; on failure it keeps the last known data and marks itself
-stale. Unofficial endpoints can change at any time — the provider layer fails
-soft and the rest keeps working.
-
-## Roadmap
-
-- [x] E0 — source spike (keyless parts)
-- [x] E0 — Travelpayouts benchmark → **call C** (off the critical path;
-      E0.1 discovery-value test confirmed: 0/8 useful hints)
-- [x] E1a — carrier recon (15 carriers) → **airBaltic + Ryanair admitted**
-- [ ] E1b — airBaltic pairing spike → adapter; Ryanair duration fix
-- [ ] E1c — watchlist skeleton → Open-Meteo climate scoring → stage-A
-      **dry run + coverage report** (the "does the architecture close?" milestone)
-- [ ] E2 — radar pipeline, price history, dashboard
-- [ ] E3 — verification, deal score, MQTT/Home Assistant alerts, digest
-- [ ] E4 — polish: adopt-into-precision-watch, threshold tuning, bag costs
+Personal, low-frequency use: one nightly pass, paced and modestly parallel,
+no CAPTCHA solving, no proxy rotation, no aggressive retries. On failure the
+last known data is kept and the run is marked. Unofficial endpoints can
+change without warning — the provider layer fails soft and the rest keeps
+working. Note that Google Flights does not index Ryanair, so Ryanair fares
+are labelled *carrier-direct* and a Google check beside them is presented as
+market context, never as verification.
 
 ## License
 
-MIT. Not affiliated with or endorsed by any airline, Google, Aviasales or
-Travelpayouts. Prices shown are indicative until verified; always confirm at
-the point of booking.
+MIT. Not affiliated with or endorsed by any airline, Google, or any of the
+data providers listed above. Prices are indicative until verified; always
+confirm at the point of booking.

@@ -1,4 +1,10 @@
-# holiday-radar — project brief (v0.4, 2026-08-23)
+# holiday-radar — project brief (v0.5, 2026-08-23)
+
+> **Status:** E0 and E1 closed with measurements; E2 in progress. The service
+> is deployed and collecting nightly ([docs/DEPLOY.md](docs/DEPLOY.md)); the
+> interface is specified in [docs/UX-SPEC.md](docs/UX-SPEC.md) and built.
+> Remaining before the E2 exit gate: market score/trends (E2-C beyond the
+> minimum), ops hardening (E2-E) and the 72 h unattended soak.
 
 A **school-holiday flight deal radar**: watches flight prices from your home
 airports to climate-appropriate, family-friendly destinations during school
@@ -212,8 +218,16 @@ Checked 2026-08-23:
   wall), Finnair (Akamai-obfuscated transport) and all connectors failed the
   gate and route to the sampler.
 - **Google Flights sampling** (fast-flights) for watches the carriers don't
-  cover — **budget-based, not cadence-based** (review 2026-08-23): a nightly
-  budget (default `google_budget = 30 searches/night`) is allocated by a
+  cover. **SUPERSEDED 2026-08-23 (owner): the sampler now runs the FULL date
+  grid for every blind watch every night** — `sampler.pairs_per_watch: 0`,
+  `workers: 6`, `google_budget: 0` (uncapped). Measured: Google answers in
+  ~1.8 s and tolerates six concurrent clients at ~0.5 s effective, so a
+  ~7.4 k-query grid finishes in about an hour. A rotation needing eight
+  nights for one sweep left data a week stale, which defeats the product.
+  The priority machinery below still governs any night where a budget IS set,
+  and the exploration floor stays an invariant. Original design:
+  **budget-based, not cadence-based** (review 2026-08-23): a nightly
+  budget (default `google_budget = 30 searches/night`) allocated by a
   per-watch priority score
   `blindness × staleness × holiday_proximity × climate_score × exploration_weight`.
   A watch with a fresh airBaltic/Ryanair signal scores ~0; a completely
@@ -580,7 +594,19 @@ Confirmed 2026-08-23 (owner):
     `family ≤ buy_threshold × 1.25`); 72 h gate moved to after
     E2-B + E2-C-minimal with machine-readable criteria and clock-injected
     dormant test. Carrier recon stays closed.
-14. **Review round 2 accepted (2026-08-23):** README brought up to date with
+14. **Full-grid nightly + deployment (owner, 2026-08-23).** The sampler
+    covers every blind watch's whole date grid nightly with six parallel
+    clients rather than rotating a few pairs; the destination pool is
+    **destination-driven, not carrier-driven** (43 → 58 after checking the
+    live airBaltic/Ryanair network maps and the published TLL/HEL/RIX 2026
+    schedules) and now includes warm US/Caribbean options for winter and
+    spring. The service runs on the home server as two containers (web +
+    scheduler) behind nginx at `radar.arvahome.org`; no authentication, home
+    network only. Consequence for ranking: with the whole grid present the
+    cheapest cell is often an edge pair, so **every date pair is scored** and
+    the winner carries its `cheapest_pair` and `zero_school_pair`
+    alternatives instead of hiding them.
+15. **Review round 2 accepted (2026-08-23):** README brought up to date with
     the recon (it had gone stale — the doc a stranger sees first);
     "REJECTED" renamed NOT ADMITTED; Google sampler made budget-based with a
     priority score and smart pair ordering (see §4C); `buy_threshold` and
