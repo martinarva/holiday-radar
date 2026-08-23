@@ -47,8 +47,11 @@ Other origins: RIX €630 direct ✓0 · HEL €1,016 1+ stop ✓0
 STAGE A — RADAR (nightly, free)
   airBaltic /api/fsf ....... whole date grids, both directions, per-day prices
   Ryanair fare finder ...... cheapest RT per destination across a window
+  Wizz Air timetable ....... per-day fares both directions (TLL only)
   Google sampler ........... every remaining destination, full date grid,
                              6 parallel clients (fast-flights)
+                             NB: indexes no ULCC — the three carrier
+                             sources above are not optional
         │ deal score: buy thresholds + market history
         ▼
 STAGE B — VERIFY (top candidates)
@@ -67,8 +70,9 @@ E2 (pipeline) is in progress.
 
 - ✅ **Sources chosen by measurement, not assumption** — a 180-watch benchmark
   rejected Travelpayouts (9 % window coverage, prices that don't correspond to
-  bookable family itineraries), and a 15-carrier recon admitted only airBaltic
-  and Ryanair. See [docs/carrier-recon.md](docs/carrier-recon.md).
+  bookable family itineraries), and a 15-carrier recon admitted airBaltic,
+  Ryanair and — after its first verdict was overturned — Wizz Air. See
+  [docs/carrier-recon.md](docs/carrier-recon.md).
 - ✅ **58-destination pool**, destination-driven rather than carrier-driven,
   checked against the live airBaltic/Ryanair network maps and the published
   TLL/HEL/RIX schedules.
@@ -106,6 +110,7 @@ Useful commands:
 | `dry-run` | full stage-A pass + coverage report |
 | `climate-fetch` | fetch/refresh Open-Meteo normals |
 | `probe-airbaltic` / `probe-ryanair` / `probe-google` | single-source probes |
+| `fetch-wizz` | Wizz Air fares only, into an existing DB (no full nightly) |
 | `serve` | UI + JSON API |
 
 ## Configuration
@@ -151,6 +156,7 @@ it without touching the backend:
 |---|---|---|
 | airBaltic `/api/fsf` | open JSON their own site uses | stage-A core |
 | Ryanair fare finder | public but unofficial JSON | stage-A |
+| Wizz Air timetable | public but unofficial JSON | stage-A (TLL only) |
 | [fast-flights](https://github.com/AWeirdDev/flights) | Google Flights library | sampler + verification |
 | [Open-Meteo](https://open-meteo.com/) | free, keyless | one-off climate normals |
 | SerpApi / SearchApi | official, keyed | optional verification backup |
@@ -160,9 +166,15 @@ Personal, low-frequency use: one nightly pass, paced and modestly parallel,
 no CAPTCHA solving, no proxy rotation, no aggressive retries. On failure the
 last known data is kept and the run is marked. Unofficial endpoints can
 change without warning — the provider layer fails soft and the rest keeps
-working. Note that Google Flights does not index Ryanair, so Ryanair fares
-are labelled *carrier-direct* and a Google check beside them is presented as
-market context, never as verification.
+working.
+
+Google Flights indexes **no low-cost carrier**: across 9819 sampled offers
+there are zero Ryanair, zero Wizz Air and zero easyJet rows, against 2653
+Lufthansa and 1923 Finnair. Those fares reach the radar through the carriers'
+own endpoints or not at all, which is why the carrier adapters are core
+rather than a nicety. It also means a Ryanair or Wizz fare cannot be checked
+against Google: they are labelled *carrier-direct*, and a Google price beside
+them is market context, never verification.
 
 ## License
 

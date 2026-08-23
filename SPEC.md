@@ -178,14 +178,16 @@ Checked 2026-08-23:
 |---|---|---|---|---|
 | **Travelpayouts Data API** (Aviasales cache) | official, token | free (affiliate account) | ~~stage A core~~ → **demoted by the E0 gate (2026-08-23): opportunistic hint layer only** (`transfers ≤ 1` filter) | measured: 9% in-window coverage on our market; cheapest entries often 2-stop self-transfer combos a family can't use |
 | **Ryanair fare finder** (`services-api.ryanair.com/farfnd/v4/roundTripFares`) | public JSON, unofficial | free, keyless | Stage A LCC supplement: cheapest RT across a whole window in one request; also "cheapest destinations from airport" | unofficial → may change; fail soft |
-| **fast-flights** (Google Flights, protobuf) | scraper library, maintained 2026 | free | **Stage B verify** on the exact date pair | ToS-gray wrt Google (personal, low volume); library dependency |
+| **Wizz Air timetable** (`be.wizzair.com/<ver>/Api/search/timetable`, version from `wizzair.com/api/metadata`) | public JSON, unofficial | free, keyless | Stage A ULCC supplement: per-day fares both directions over an arbitrary range; TLL only (RIX exited, HEL never served) | unofficial → may change; version must be discovered, never pinned; fail soft |
+| **fast-flights** (Google Flights, protobuf) | scraper library, maintained 2026 | free | Stage-A sampler for everything the carriers miss + **Stage B verify** on the exact date pair. **Indexes no ULCC** — 0 Ryanair/Wizz/easyJet rows in 9819 sampled offers | ToS-gray wrt Google (personal, low volume); library dependency |
 | **Hosted SERP APIs** (SerpApi.com / SearchApi.io) | official, key | SerpApi: 250/mo free (account-verified) · SearchApi: 100 one-time, ~$40/mo=10k | stage-B backup (SerpApi free alone covers verify); paid tier could carry the whole sampler | costs money at scale; same Google data fast-flights gets free |
 | ~~Amadeus Self-Service~~ | — | — | — | **closed to new signups 2026-07-17** — out |
 | ~~Kiwi Tequila~~, ~~Skyscanner~~ | — | — | — | partner-only for years — out |
 
 **Request budget** (4 holidays × 3 origins × ~15 destinations):
 - Stage A: Travelpayouts ~180–360 cached queries nightly (free, spread out) +
-  Ryanair ~15–40 (only its routes).
+  Ryanair ~15–40 (only its routes) + Wizz ~8 (one network map, then one POST
+  per pool route × holiday — TLL serves only FCO and TIA of the pool).
 - Stage B: ≤ 10 verify searches/day (fast-flights; hosted SERP API as backup).
 - **Total cost: €0.** Polite volume, house-style graceful failure everywhere.
 
@@ -209,14 +211,20 @@ Checked 2026-08-23:
   calendars poor for discovery) likely stay on the Google sampler. Live recon
   status: [docs/carrier-recon.md](docs/carrier-recon.md).
   **Recon outcome (2026-08-23, all carriers probed): stage A =
-  airBaltic + Ryanair + coverage-aware Google sampler.** airBaltic was
+  airBaltic + Ryanair + Wizz Air + coverage-aware Google sampler.**
+  (Wizz was first recorded NOT ADMITTED and overturned the same day — the
+  404 came from guessing API versions rather than calling the metadata
+  endpoint, and the "sampler covers it" rationale proved false. See
+  decision #17 and docs/carrier-recon.md.) airBaltic was
   admitted with the best source found anywhere — open JSON
   (`/api/fsf/outbound|inbound|overall`, `/api/orig-dest/en`), per-day prices
   + isDirect for arbitrary ranges in one GET, plain-curl friendly, covering
-  ~312/516 watches (RIX: 26 pool destinations, all direct). Wizz (1 pool
-  destination, PerimeterX), Norwegian (perfect endpoint behind a Cloudflare
-  wall), Finnair (Akamai-obfuscated transport) and all connectors failed the
-  gate and route to the sampler.
+  ~312/516 watches (RIX: 26 pool destinations, all direct). Wizz was recorded
+  as failing the gate here and was **later admitted** (2 pool destinations
+  from TLL — FCO and TIA; the PerimeterX finding applied to the fare-finder
+  UI, not to the timetable API the adapter uses). Norwegian (perfect endpoint
+  behind a Cloudflare wall), Finnair (Akamai-obfuscated transport) and all
+  connectors failed the gate and route to the sampler.
 - **Google Flights sampling** (fast-flights) for watches the carriers don't
   cover. **SUPERSEDED 2026-08-23 (owner): the sampler now runs the FULL date
   grid for every blind watch every night** — `sampler.pairs_per_watch: 0`,
@@ -350,7 +358,7 @@ provider: google_flights
 |---|---|---|---|
 | TLL | home airport | €0 | 0 |
 | HEL | Finnair long-haul (winter: direct Canaries, Thailand!), Norwegian, Ryanair base — several times more direct routes | default +€120 (ferry ×4 + transfer) | ~+4 h |
-| RIX | largest airBaltic/Ryanair/Wizz route map in the Baltics | default +€90 (fuel + parking) | ~+5 h drive each way |
+| RIX | largest airBaltic/Ryanair route map in the Baltics (Wizz left Riga in 2023 — see docs/carrier-recon.md) | default +€90 (fuel + parking) | ~+5 h drive each way |
 
 Money and time are **separate handicaps**: ranking adds `handicap_eur` to the
 fare; the time cost is displayed, never auto-converted to euros. UI example:
@@ -368,7 +376,11 @@ The human decides ("€300 cheaper, but 9 h of extra logistics with two kids?").
   Providers yield different shapes (one an exact cheapest pair, another a
   calendar grid, a third only a destination-level minimum), so a watch holds
   **several concurrent candidates**; stage B receives the top-K date pairs,
-  not one.
+  not one. Rows also carry what the source publishes about the *itinerary*:
+  clock times (`out_departure`/`out_arrival`/`in_departure`/`in_arrival` —
+  Ryanair and Wizz give both directions, Google only the outbound, airBaltic
+  none) and the connection (`max_layover_h`, `layover_label`,
+  `layover_overnight`), because a fare is not comparable without them.
 - `radar_deals` — verified deals + alert state
 
 ## 7. Stages

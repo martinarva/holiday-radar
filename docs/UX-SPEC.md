@@ -156,9 +156,11 @@ distinction visible — this is a transparency requirement.
 CTA follows the state: *Verify live price* → *View flights* → *Book with
 airline*. An indicative price must never look verified (AC6).
 
-Special case: a **Ryanair** fare cannot be verified on Google (Google does
-not index Ryanair). Such a check is labelled *market context*: "cheapest
-non-Ryanair alternative €998" — never "verified".
+Special case: a **low-cost carrier** fare cannot be verified on Google, which
+indexes no ULCC at all — zero Ryanair, Wizz Air or easyJet rows across 9819
+sampled offers. Such a check is labelled *market context*: "cheapest
+alternative on Google €998" — never "verified". Verifying a Ryanair or Wizz
+fare means going back to that carrier.
 
 ## 8. Tracking
 
