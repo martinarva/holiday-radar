@@ -60,10 +60,14 @@ function schoolTag(b){
   return `<span class="stop" title="school days missed">🏫 ${parts.join(" · ")}</span>`;
 }
 function bestCell(b){
-  if(!b) return `<td colspan="6" class="mut">no priced pair</td>`;
+  if(!b) return `<td colspan="7" class="mut">no priced pair</td>`;
   const d = b.is_direct ? `<span class="direct">direct</span>`
                         : `<span class="stop">1-stop</span>`;
-  return `<td class="num fam">${money(b.family_eur)}</td>
+  const eff = b.logistics_eur
+    ? `<td class="num fam" title="fare ${money(b.family_eur)} + logistics ${money(b.logistics_eur)}">${money(b.effective_eur)}</td>`
+    : `<td class="num fam">${money(b.effective_eur)}</td>`;
+  return `${eff}
+          <td class="num mut">${b.logistics_eur ? money(b.family_eur)+" + "+money(b.logistics_eur) : "–"}</td>
           <td class="num">${money(b.adult_eur)}/ad</td>
           <td>${b.out_date} → ${b.back_date} (${b.nights}n)</td>
           <td>${d}</td>
@@ -99,7 +103,7 @@ async function load(){
         <span>1-stop ${c.covered_1stop||0}</span>
         <span>blind ${c.blind||0}</span>
         <span>dormant ${c.dormant||0}</span>
-        ${hol.best ? `<span>best: <b>${money(hol.best.family_eur)}</b> ${hol.best.origin}→${hol.best.destination}</span>` : ""}
+        ${hol.best ? `<span>best effective: <b>${money(hol.best.effective_eur)}</b> ${hol.best.origin}→${hol.best.destination}${hol.best.logistics_eur ? ` <span class="mut">(${money(hol.best.family_eur)} + ${money(hol.best.logistics_eur)} logistics)</span>` : ""}</span>` : ""}
       </div>
       <button data-h="${hol.id}">show watches</button>
       <div class="wrap" id="t-${hol.id}"></div>`;
@@ -118,30 +122,27 @@ async function load(){
       if(!rows.length) return "";
       const priced = rows.filter(r => r.best);
       const cheapest = priced.length
-        ? Math.min(...priced.map(r => r.best.family_eur)) : null;
-      const hcap = og.handicap_eur
-        ? ` · logistics +${og.handicap_eur} € / fam · ~+${og.extra_time_h} h` : "";
-      const effTh = og.handicap_eur ? "<th>effective</th>" : "";
-      const body = rows.map(r => {
-        const eff = (og.handicap_eur && r.best)
-          ? `<td class="num">${money(r.best.family_eur + og.handicap_eur)}</td>`
-          : (og.handicap_eur ? `<td class="mut"></td>` : "");
-        return `
+        ? Math.min(...priced.map(r => r.best.effective_eur)) : null;
+      const hparts = [];
+      if(og.handicap_fixed_eur) hparts.push(`fixed ${og.handicap_fixed_eur} €`);
+      if(og.handicap_per_day_eur) hparts.push(`parking ${og.handicap_per_day_eur} €/day`);
+      const hcap = hparts.length
+        ? ` · logistics: ${hparts.join(" + ")} · ~+${og.extra_time_h} h` : "";
+      const body = rows.map(r => `
         <tr class="${r.coverage_class==='blind'||r.coverage_class==='dormant'?'blind':''}">
           <td>${r.destination}</td>
           <td class="mut">${r.destination_name}</td>
           <td>${r.status} ${r.score} <span class="tag">${r.rule}</span></td>
           <td>${r.coverage_class.replace("covered_","")}</td>
-          ${bestCell(r.best)}${eff}
-        </tr>`;
-      }).join("");
+          ${bestCell(r.best)}
+        </tr>`).join("");
       return `
       <h3 class="origin"><b>${og.code}</b><span class="mut"> — ${og.note}${hcap}
-        · ${priced.length}/${rows.length} priced${cheapest ? ` · best ${money(cheapest)}` : ""}</span></h3>
+        · ${priced.length}/${rows.length} priced${cheapest ? ` · best effective ${money(cheapest)}` : ""}</span></h3>
       <table>
         <tr><th>dest</th><th></th><th>climate</th><th>coverage</th>
-            <th>family est.</th><th>adult</th><th>best pair</th><th></th>
-            <th>school</th><th>source</th>${effTh}</tr>
+            <th>effective</th><th>fare + logistics</th><th>adult</th>
+            <th>best pair</th><th></th><th>school</th><th>source</th></tr>
         ${body}</table>`;
     }).join("");
   });

@@ -35,9 +35,16 @@ def _as_date(v) -> date:
 @dataclass(frozen=True)
 class Origin:
     code: str
-    handicap_eur: float = 0.0   # added to fares in ranking
-    extra_time_h: float = 0.0   # displayed only — never auto-priced
+    handicap_fixed_eur: float = 0.0    # one-off logistics (fuel, ferry)
+    handicap_per_day_eur: float = 0.0  # per trip day (airport parking)
+    extra_time_h: float = 0.0          # displayed only — never auto-priced
     note: str = ""
+
+    def logistics_eur(self, nights: int) -> float:
+        """Trip-length-aware handicap: effective = fare + logistics.
+        Trip days = nights + 1 (out day through return day)."""
+        return round(self.handicap_fixed_eur
+                     + self.handicap_per_day_eur * (nights + 1), 2)
 
 
 @dataclass(frozen=True)
@@ -156,7 +163,10 @@ def load_config(path: str | Path = "config.yaml") -> Config:
             infants=int(pax.get("infants", 0)),
         ),
         origins=[Origin(code=o["code"].upper(),
-                        handicap_eur=float(o.get("handicap_eur", 0)),
+                        # legacy key handicap_eur is honoured as the fixed part
+                        handicap_fixed_eur=float(o.get("handicap_fixed_eur",
+                                                       o.get("handicap_eur", 0))),
+                        handicap_per_day_eur=float(o.get("handicap_per_day_eur", 0)),
                         extra_time_h=float(o.get("extra_time_h", 0)),
                         note=o.get("note", ""))
                  for o in raw.get("origins", [])],

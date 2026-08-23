@@ -37,12 +37,16 @@ def test_public_holidays_loaded(cfg):
     assert date(2028, 2, 24) in cfg.public_holidays   # Independence Day
 
 
-def test_origins_with_separate_handicaps(cfg):
+def test_origins_with_trip_length_aware_handicaps(cfg):
     assert [o.code for o in cfg.origins] == ["TLL", "HEL", "RIX"]
     hel = cfg.origin("HEL")
-    assert hel.handicap_eur == 120 and hel.extra_time_h == 4
+    assert hel.handicap_fixed_eur == 120 and hel.handicap_per_day_eur == 0
     rix = cfg.origin("RIX")
-    assert rix.handicap_eur == 90 and rix.extra_time_h == 5
+    # fuel 620 km @ 10 l/100 @ 1.70 EUR/l ~= 105 + first-day parking surcharge 2
+    assert rix.handicap_fixed_eur == 107 and rix.handicap_per_day_eur == 5
+    # 10 nights = 11 trip days: 107 + 5*11 = 162
+    assert rix.logistics_eur(10) == 162
+    assert cfg.origin("TLL").logistics_eur(10) == 0
 
 
 def test_spanish_must_haves_present(cfg):

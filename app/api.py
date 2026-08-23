@@ -46,9 +46,14 @@ def _best_payload(cfg: Config, h, row: dict | None) -> dict | None:
     from datetime import date
     out = date.fromisoformat(row["out_date"])
     back = date.fromisoformat(row["back_date"])
+    nights = (back - out).days
+    origin = cfg.origin(row["origin"])
+    logistics = origin.logistics_eur(nights) if origin else 0.0
     sd_before, sd_after = h.school_days_breakdown(out, back, cfg.public_holidays)
     return {
         "family_eur": row["estimated_family_eur"],
+        "logistics_eur": logistics,
+        "effective_eur": round((row["estimated_family_eur"] or 0) + logistics, 2),
         "adult_eur": row["price_adult_eur"],
         "out_date": row["out_date"], "back_date": row["back_date"],
         "nights": (back - out).days,
@@ -109,13 +114,18 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                     "SELECT coverage_class, COUNT(*) c FROM watch_state "
                     "WHERE holiday_id=? GROUP BY coverage_class", (h.id,)):
                 counts[r["coverage_class"]] = r["c"]
+            # the holiday's best deal is chosen by EFFECTIVE price (fare +
+            # trip-length logistics), so a RIX bargain competes honestly
+            # against TLL after the drive and parking are counted
             best_rows = _best_by_watch(conn, h.id, night)
-            best = min(best_rows.values(), key=lambda r: r["estimated_family_eur"]) \
-                if best_rows else None
-            payload = _best_payload(cfg, h, best)
-            if payload and best:
-                payload["origin"] = best["origin"]
-                payload["destination"] = best["destination"]
+            payloads = []
+            for (og, dest), row in best_rows.items():
+                p = _best_payload(cfg, h, row)
+                if p:
+                    p["origin"], p["destination"] = og, dest
+                    payloads.append(p)
+            payload = min(payloads, key=lambda p: p["effective_eur"]) \
+                if payloads else None
             out.append({
                 "id": h.id, "name": h.name,
                 "start": h.start.isoformat(), "end": h.end.isoformat(),
@@ -123,7 +133,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             })
         conn.close()
         return {"latest_night": night,
-                "origins": [{"code": o.code, "handicap_eur": o.handicap_eur,
+                "origins": [{"code": o.code,
+                             "handicap_fixed_eur": o.handicap_fixed_eur,
+                             "handicap_per_day_eur": o.handicap_per_day_eur,
                              "extra_time_h": o.extra_time_h, "note": o.note}
                             for o in cfg.origins],
                 "holidays": out}
@@ -150,12 +162,12 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                                       best_rows.get((w["origin"], w["destination"]))),
             })
         conn.close()
-        # cheapest family price first regardless of direct/1-stop;
+        # cheapest EFFECTIVE price first (fare + trip-length logistics);
         # unpriced rows (blind, then dormant) tail the list
         tail = {"blind": 0, "dormant": 1}
         rows.sort(key=lambda r: (
             r["best"] is None,
-            r["best"]["family_eur"] if r["best"]
+            r["best"]["effective_eur"] if r["best"]
             else tail.get(r["coverage_class"], 2)))
         return {"holiday": holiday_id, "latest_night": night, "watches": rows}
 
