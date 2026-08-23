@@ -25,6 +25,21 @@ preferences:
   # A connection that needs a bed (overnight, or a full day in a terminal)
   # adds this to the trip's real cost.
   layover_hotel_eur: 110
+  # Push alerts to Home Assistant. The webhook URL is a secret and lives in
+  # .env as HA_WEBHOOK_URL; without it the radar runs exactly as before.
+  # These rules exist to keep the phone quiet: the radar reprices ~45
+  # destinations every night, so alerts fire on a CHANGE of state, never on
+  # a state, and a fare that merely holds says nothing.
+  alerts:
+    enabled: true
+    deal_levels: [exceptional, good]   # tier labels worth a push
+    min_drop_pct: 5                    # a re-alert must beat the last by both
+    min_drop_eur: 40                   # a share AND an absolute amount
+    repeat_after_days: 14              # ...or simply be this stale
+    max_per_run: 5
+    # The night decides at 02:45; this is when the phone actually buzzes,
+    # as one digest rather than a handful of separate pushes.
+    deliver_cron: "0 7 * * *"
 
 # Origin airports with honest logistics handicaps:
 #   effective = fare + handicap_fixed_eur + handicap_per_day_eur x trip days

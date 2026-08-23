@@ -111,3 +111,67 @@ docker logs -f holiday-radar-scheduler
 `/health` reports the latest data night, total observations and the last
 run with its error count; the System screen in the UI shows the same plus
 coverage, provider status and budget usage.
+
+## Deal alerts to Home Assistant
+
+The night decides, the morning delivers. The 02:45 cycle queues anything
+newsworthy; at 07:00 the daemon posts the queue as **one** digest. Three
+things earn a place in it, and each is a *change* of state, never a state:
+
+| Rule | Fires when |
+|---|---|
+| `buy` | effective cost crossed a tier's buy threshold downward |
+| `new_low` | cheaper than anything ever recorded for that holiday × destination |
+| `new_best` | the holiday's top-ranked destination changed |
+
+A fare that merely holds is silent. A re-alert must beat the last one by
+**both** `min_drop_pct` and `min_drop_eur`, or simply be `repeat_after_days`
+stale — otherwise a €12 wobble on a €2000 trip would buzz every morning.
+
+### Wiring it up
+
+1. In Home Assistant, create an automation with a **Webhook** trigger and
+   copy its URL (`https://<ha-host>/api/webhook/<id>`).
+2. Put it in `.env` on the server as `HA_WEBHOOK_URL=` and restart the
+   scheduler. Without it the radar runs exactly as before and sends nothing.
+3. Check the plumbing without waiting for a real price drop:
+
+```bash
+docker exec holiday-radar-web python -m app.cli test-alert
+```
+
+### The payload
+
+```yaml
+automation:
+  - alias: Flight deal
+    trigger:
+      - platform: webhook
+        webhook_id: <id>
+        allowed_methods: [POST]
+        local_only: false        # only if the radar reaches HA from outside
+    action:
+      - service: notify.mobile_app_<device>
+        data:
+          title: "{{ trigger.json.title }}"
+          message: >
+            {{ trigger.json.best.detail }}
+          data:
+            url: "https://<radar-host>/#/h/{{ trigger.json.best.holiday_id }}/{{ trigger.json.best.destination }}"
+```
+
+`trigger.json` carries `count`, `title`, `headline`, `summary`, `best` (the
+cheapest find, fully described) and `alerts` (all of them). Each entry has
+`effective_eur`, `flights_eur`, `logistics_eur`, `layover_hotel_eur`,
+`out_date`, `back_date`, `nights`, `origin`, `airlines`, `is_direct`,
+`layover`, `layover_overnight`, `times`, `school_days`, `climate_c`, `deal`,
+`score`, `previous_eur` and a ready-made `detail` line.
+
+Prices are **indicative screening numbers** — `confidence` says so. Google's
+cached fares can lack seats for four, so the booking price may differ.
+
+### Tuning
+
+Everything lives under `preferences.alerts` in `config.yaml`:
+`enabled`, `deal_levels`, `min_drop_pct`, `min_drop_eur`,
+`repeat_after_days`, `max_per_run` and `deliver_cron` (the 07:00 slot).

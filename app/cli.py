@@ -232,6 +232,39 @@ def cmd_nightly(cfg: Config, args) -> None:
         print(f"  {k}: {v}")
 
 
+def cmd_test_alert(cfg: Config, args) -> None:
+    """Send one alert to the Home Assistant webhook so you can wire up the
+    automation without waiting for a real price drop."""
+    from app import notify
+
+    url = notify.webhook_url()
+    if not url:
+        print(f"  {notify.WEBHOOK_ENV} is not set (see .env.example) — "
+              "the radar runs fine without alerts, it just sends none.")
+        return
+    host = url.split("/api/webhook/")[0]
+    payload = {
+        "kind": notify.KIND_BUY, "title": "Malaga €352 — good deal for "
+        "Autumn break 2026", "holiday_id": "autumn-2026",
+        "holiday": "Autumn break 2026", "destination": "AGP",
+        "destination_name": "Malaga", "origin": "TLL",
+        "effective_eur": 352.0, "flights_eur": 352.0, "logistics_eur": 0,
+        "layover_hotel_eur": None, "out_date": "2026-10-26",
+        "back_date": "2026-11-01", "nights": 6, "airlines": ["Ryanair"],
+        "is_direct": True, "layover": None, "layover_overnight": None,
+        "times": "out 06:20, back 21:45", "school_days": 0, "score": 8.1,
+        "deal": "good", "deal_label": "good deal", "climate_c": 23.0,
+        "detail": ("TLL · nonstop · Ryanair · 2026-10-26 → 2026-11-01 "
+                   "(6 nights) · 23°C typical · no school missed"),
+        "confidence": "indicative", "previous_eur": 430.0, "test": True,
+    }
+    print(f"  POST {host}/api/webhook/***")
+    try:
+        print(f"  HTTP {notify.post(url, payload)} — check Home Assistant")
+    except notify.NotifyError as e:
+        print(f"  failed: {e}")
+
+
 def cmd_fetch_wizz(cfg: Config, args) -> None:
     """Wizz Air only — no Google sampler, no airBaltic, no full nightly.
 
@@ -356,6 +389,9 @@ def main(argv: list[str] | None = None) -> None:
     pn.add_argument("--workers", type=int, default=None,
                     help="parallel Google clients")
 
+    sub.add_parser("test-alert",
+                   help="send a sample deal alert to the HA webhook")
+
     pw = sub.add_parser("fetch-wizz",
                         help="Wizz Air fares only, into an existing DB")
     pw.add_argument("--db", default="data/radar.db")
@@ -411,6 +447,7 @@ def main(argv: list[str] | None = None) -> None:
          "dry-run": cmd_dry_run,
          "coverage-report": cmd_coverage_report,
          "nightly": cmd_nightly,
+         "test-alert": cmd_test_alert,
          "fetch-wizz": cmd_fetch_wizz,
          "run-scheduler": cmd_run_scheduler,
          "serve": cmd_serve,

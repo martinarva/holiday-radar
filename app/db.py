@@ -209,6 +209,28 @@ MIGRATIONS: list[tuple[str, str]] = [
         ALTER TABLE observations ADD COLUMN layover_label TEXT"""),
     ("0028_observation_layover3", """
         ALTER TABLE observations ADD COLUMN layover_overnight INTEGER"""),
+
+    ("0029_alerts", """
+        CREATE TABLE IF NOT EXISTS alerts (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          kind           TEXT NOT NULL,
+          holiday_id     TEXT NOT NULL,
+          destination    TEXT NOT NULL,
+          origin         TEXT,
+          effective_eur  REAL NOT NULL,
+          observed_night TEXT NOT NULL,
+          sent_at        TEXT NOT NULL,
+          payload        TEXT
+        )"""),
+    ("0030_alerts_idx", """
+        CREATE INDEX IF NOT EXISTS alerts_lookup
+          ON alerts (kind, holiday_id, destination, id)"""),
+
+    ("0031_alerts_delivered", """
+        ALTER TABLE alerts ADD COLUMN delivered INTEGER NOT NULL DEFAULT 1"""),
+
+    ("0032_alerts_status", """
+        ALTER TABLE alerts ADD COLUMN status TEXT NOT NULL DEFAULT 'sent'"""),
 ]
 
 # source -> operating carrier when the source implies it

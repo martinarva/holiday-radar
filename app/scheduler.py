@@ -401,6 +401,21 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
     log(f"verify hook: {used_verify}/{verify_budget} candidates handled "
         f"(pool {len(candidates)})")
 
+    # --- alerts: queue the night's news for the morning slot ---
+    # Deciding happens here at 02:45; the daemon posts the queue as one digest
+    # at 07:00, because nobody wants a phone lighting up at three in the
+    # morning.
+    alerts_queued = 0
+    try:
+        from app import climate as climate_mod, notify, opportunity as opp
+        cache = climate_mod.load_cache(cfg)
+        for h in cfg.active_holidays():
+            items = opp.build(cfg, conn, h, night, cache)
+            alerts_queued += notify.queue(cfg, conn, h, items, night, log=log)
+    except Exception as e:            # never let a notifier abort the night
+        errors.append(f"alerts: {e}")
+        log(f"alerts failed: {e}")
+
     summary = {
         "night": night, "carrier_observations": carrier_obs,
         "discovery_used": used_discovery, "discovery_budget": google_budget,
@@ -409,6 +424,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
         "floor_due": len(floor_due), "blind_queue": len(blind),
         "audit_used": used_audit, "audit_budget": audit_budget,
         "verify_rows": used_verify, "verify_pool": len(candidates),
+        "alerts_queued": alerts_queued,
         "errors": len(errors),
     }
     dbm.record_run(conn, "nightly", started, summary, errors=errors)

@@ -111,6 +111,7 @@ Useful commands:
 | `climate-fetch` | fetch/refresh Open-Meteo normals |
 | `probe-airbaltic` / `probe-ryanair` / `probe-google` | single-source probes |
 | `fetch-wizz` | Wizz Air fares only, into an existing DB (no full nightly) |
+| `test-alert` | send a sample deal alert to the Home Assistant webhook |
 | `serve` | UI + JSON API |
 
 ## Configuration
