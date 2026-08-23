@@ -45,6 +45,7 @@ HEADERS = {
 }
 
 _api_base: str | None = None
+_network: dict | None = None      # the map is ~650 KB; fetch it once
 
 
 def _request(url: str, payload: dict | None = None, timeout: int = 25):
@@ -80,8 +81,10 @@ def routes(airport: str) -> list[dict]:
     Returns [] for an airport outside the network (RIX, HEL) rather than
     raising — "Wizz does not fly here" is an answer, not a failure.
     """
-    data = _request(f"{api_base()}/asset/map?languageCode=en-gb")
-    for city in data.get("cities", []):
+    global _network
+    if _network is None:
+        _network = _request(f"{api_base()}/asset/map?languageCode=en-gb")
+    for city in _network.get("cities", []):
         if (city.get("iata") or "").upper() != airport.upper():
             continue
         out = []
