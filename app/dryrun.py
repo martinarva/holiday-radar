@@ -85,6 +85,12 @@ def run(cfg: Config, log=print, sleep_s: float = 0.12,
     from datetime import datetime, timezone
     started_at = datetime.now(timezone.utc).isoformat()
     today = date.today()
+    errors: list[str] = []
+    _log = log
+    def log(msg):                                      # noqa: A001
+        if any(t in str(msg) for t in (": airbaltic:", ": ryanair:", "FAILED")):
+            errors.append(str(msg))
+        _log(msg)
     cache = climate.ensure_normals(cfg, log=log)
     hols = {h.id: h for h in cfg.active_holidays()}
 
@@ -177,8 +183,8 @@ def run(cfg: Config, log=print, sleep_s: float = 0.12,
     summary["airbaltic_calls_per_night"] = n_calls
 
     if db_path:
-        _persist(cfg, db_path, relevant, summary, started_at)
-        log(f"persisted to {db_path}")
+        _persist(cfg, db_path, relevant, summary, started_at, errors)
+        log(f"persisted to {db_path} ({len(errors)} provider errors logged)")
 
     md = _report_md(cfg, summary, hols, relevant, blind, best, today)
     return summary, md
@@ -240,7 +246,8 @@ def compute_metrics(cfg: Config, hols: dict[str, Holiday],
 
 
 def _persist(cfg: Config, db_path, relevant: list[WatchRow],
-             summary: dict, started_at: str) -> None:
+             summary: dict, started_at: str,
+             errors: list[str] | None = None) -> None:
     from app import db as dbm
     conn = dbm.init_db(db_path)
     seats = cfg.passengers.seats
@@ -254,7 +261,7 @@ def _persist(cfg: Config, db_path, relevant: list[WatchRow],
         "rule": r.rule, "dormant": r.dormant,
         "coverage_class": r.coverage_class,
     } for r in relevant])
-    dbm.record_run(conn, "dry-run", started_at, summary)
+    dbm.record_run(conn, "dry-run", started_at, summary, errors=errors)
     conn.close()
 
 

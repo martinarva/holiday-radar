@@ -68,6 +68,8 @@ MIGRATIONS: list[tuple[str, str]] = [
             finished_at TEXT NOT NULL,
             summary_json TEXT NOT NULL
         )"""),
+    ("0006_runs_errors", """
+        ALTER TABLE runs ADD COLUMN errors_json TEXT"""),
 ]
 
 
@@ -148,11 +150,12 @@ def write_watch_state(conn: sqlite3.Connection, rows: list[dict]) -> None:
 
 
 def record_run(conn: sqlite3.Connection, kind: str, started_at: str,
-               summary: dict) -> None:
-    conn.execute("INSERT INTO runs (kind, started_at, finished_at, summary_json) "
-                 "VALUES (?,?,?,?)",
+               summary: dict, errors: list[str] | None = None) -> None:
+    conn.execute("INSERT INTO runs (kind, started_at, finished_at, "
+                 "summary_json, errors_json) VALUES (?,?,?,?,?)",
                  (kind, started_at, datetime.now(UTC).isoformat(),
-                  json.dumps(summary)))
+                  json.dumps(summary),
+                  json.dumps(errors) if errors else None))
     conn.commit()
 
 

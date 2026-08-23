@@ -211,6 +211,13 @@ def cmd_coverage_report(cfg: Config, args) -> None:
         print(f"report written: {out}")
 
 
+def cmd_serve(cfg: Config, args) -> None:
+    import uvicorn
+    from app.api import create_app
+    print(f"dev UI: http://localhost:{args.port}/")
+    uvicorn.run(create_app(cfg), host=args.host, port=args.port, log_level="warning")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="holiday-radar")
     p.add_argument("--config", default="config.yaml")
@@ -249,6 +256,10 @@ def main(argv: list[str] | None = None) -> None:
     pdr.add_argument("--db", default="data/radar.db")
     pdr.add_argument("--no-db", action="store_true",
                      help="skip persistence (pre-E2 behaviour)")
+
+    psv = sub.add_parser("serve", help="dev UI + JSON API (reads DB only)")
+    psv.add_argument("--port", type=int, default=8765)
+    psv.add_argument("--host", default="127.0.0.1")
 
     pcr = sub.add_parser("coverage-report",
                          help="recompute the coverage report from the DB (no network)")
@@ -289,6 +300,7 @@ def main(argv: list[str] | None = None) -> None:
          "climate-fetch": cmd_climate_fetch,
          "dry-run": cmd_dry_run,
          "coverage-report": cmd_coverage_report,
+         "serve": cmd_serve,
          "probe-google": cmd_probe_google,
          "probe-travelpayouts": cmd_probe_tp,
          "benchmark": cmd_benchmark,
