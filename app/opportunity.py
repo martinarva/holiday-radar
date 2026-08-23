@@ -287,26 +287,36 @@ def latest_priced_rows(conn, holiday_id: str, night: str | None,
     # we last priced it and nothing came back, the flight is gone — no need
     # to wait out a rotation before saying so.
     gone = dbm.empty_probes(conn, holiday_id)
+    modes = dbm.collection_modes(conn)
     rows = []
     for r in conn.execute(sql, params):
         row = dict(r)
         row["_from_night"] = (None if r["observed_night"] == night
                               else r["observed_night"])
+        # The tombstone is checked BEFORE the "it's tonight's" shortcut. A
+        # rerun of the same night can price a pair and then find it gone —
+        # skipping the check for today's rows kept the vanished fare on
+        # screen. Hence >= on the observation, not >.
+        probed = gone.get((r["origin"], r["destination"], r["out_date"],
+                           r["back_date"], r["source"]))
+        # ...and it must not reach backwards. `night` may be a historical
+        # as-of query, and a tombstone written on the 23rd said nothing about
+        # what we knew on the 22nd.
+        if (probed and probed >= r["observed_night"] and probed <= night):
+            continue        # asked again by then, found nothing: retire it
         if not row["_from_night"]:
             rows.append(row)
             continue
-        probed = gone.get((r["origin"], r["destination"], r["out_date"],
-                           r["back_date"], r["source"]))
-        if probed and probed > r["observed_night"]:
-            continue        # asked again, found nothing: retire it
         if _nights_apart(row["_from_night"], night) >= _ttl(
-                cfg, r["source"], _col(r, "observation_role")):
+                cfg, r["source"], _col(r, "observation_role"),
+                modes.get(r["observed_night"])):
             continue        # nobody has looked in long enough to give up
         rows.append(row)
     return rows
 
 
-def _ttl(cfg: Config | None, source: str, role: str | None = None) -> float:
+def _ttl(cfg: Config | None, source: str, role: str | None = None,
+         pairs_per_watch: int | None = None) -> float:
     """How many nights a price may be carried, by what its source means.
 
     A snapshot carrier (airBaltic, Ryanair, Wizz) hands back its whole
@@ -328,8 +338,12 @@ def _ttl(cfg: Config | None, source: str, role: str | None = None) -> float:
     # again and must not inherit the rotation's patience.
     if role and role != "discovery":
         return float(prefs.get("stale_after_nights", 3))
-    sampler = (cfg.sampler or {}) if cfg else {}
-    per_night = int(sampler.get("pairs_per_watch") or 0)
+    # The mode the night was ACTUALLY collected in, recorded by that run.
+    # Config is only the fallback for nights predating the record.
+    if pairs_per_watch is None:
+        sampler = (cfg.sampler or {}) if cfg else {}
+        pairs_per_watch = int(sampler.get("pairs_per_watch") or 0)
+    per_night = int(pairs_per_watch)
     if per_night <= 0:
         # full grid every night: the sampler is a snapshot source too
         return float(prefs.get("stale_after_nights", 3))

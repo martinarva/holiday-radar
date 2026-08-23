@@ -292,6 +292,13 @@ MIGRATIONS: list[tuple[str, str]] = [
           PRIMARY KEY (holiday_id, origin, destination, out_date, back_date,
                        source)
         )"""),
+
+    ("0043_collection_mode", """
+        CREATE TABLE IF NOT EXISTS collection_mode (
+          observed_night   TEXT PRIMARY KEY,
+          pairs_per_watch  INTEGER NOT NULL,
+          recorded_at      TEXT NOT NULL
+        )"""),
 ]
 
 # source -> operating carrier when the source implies it
@@ -382,6 +389,34 @@ def empty_probes(conn: sqlite3.Connection, holiday_id: str) -> dict:
             for r in conn.execute(
                 "SELECT * FROM pair_probes WHERE holiday_id=? AND found=0",
                 (holiday_id,))}
+
+
+def record_collection_mode(conn: sqlite3.Connection, night: str,
+                           pairs_per_watch: int) -> None:
+    """Store HOW a night was collected, so readers do not have to guess.
+
+    Staleness policy depends on whether the sampler swept the full grid or
+    rotated through it. Deriving that from config at read time was wrong the
+    moment the two could differ: a `--pairs-per-watch 1` run stored a partial
+    rotation, then the web container re-read the YAML, saw 0, and aged the
+    data as a full-grid snapshot — deleting most of what had just been
+    collected. The run records its own mode; the reader obeys it.
+    """
+    conn.execute("""
+        INSERT INTO collection_mode (observed_night, pairs_per_watch,
+                                     recorded_at)
+        VALUES (?,?,?)
+        ON CONFLICT(observed_night) DO UPDATE SET
+          pairs_per_watch=excluded.pairs_per_watch,
+          recorded_at=excluded.recorded_at
+    """, (night, int(pairs_per_watch), datetime.now(UTC).isoformat()))
+    conn.commit()
+
+
+def collection_modes(conn: sqlite3.Connection) -> dict:
+    """night -> pairs_per_watch, for every night we recorded."""
+    return {r["observed_night"]: r["pairs_per_watch"]
+            for r in conn.execute("SELECT * FROM collection_mode")}
 
 
 def run_migration(conn: sqlite3.Connection, name: str) -> None:

@@ -149,6 +149,9 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
     seats = cfg.passengers.seats
 
     conn = dbm.init_db(db_path)
+    # How tonight was collected, so a separate reader process does not have
+    # to re-derive it from a config file that may since have changed.
+    dbm.record_collection_mode(conn, night, pairs_per_watch)
     # keep the DB self-describing: destinations, holidays and climate normals
     # mirrored from config so analysis never needs the YAML
     try:

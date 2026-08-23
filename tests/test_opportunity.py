@@ -710,3 +710,83 @@ def test_only_discovery_rows_inherit_the_rotations_patience(cfg):
     assert opp._ttl(throttled, "google_flights", "discovery") > 30
     assert opp._ttl(throttled, "google_flights", "audit") == 3
     assert opp._ttl(throttled, "google_flights", "verification") == 3
+
+
+def test_a_tombstone_applies_to_the_night_it_was_written_and_no_earlier(cfg,
+                                                                        tmp_path):
+    """Three edges the first version got wrong.
+
+    A same-night rerun can price a pair and then find it gone — the "it's
+    tonight's data" shortcut ran before the tombstone check and kept the
+    vanished fare visible. And a tombstone must not reach backwards: written
+    on the 23rd, it said nothing about what we knew on the 22nd.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+
+    def price(night):
+        dbm.upsert_observations(conn, h.id, [Observation(
+            origin="TLL", destination="AGP", out_date=out, back_date=back,
+            price_adult_eur=200.0, source="google_flights",
+            estimated_family_eur=800.0, is_direct=True)], seats=4, night=night)
+
+    def visible(as_of):
+        return bool(opp.latest_priced_rows(conn, h.id, as_of, cfg=cfg))
+
+    price("2026-08-22")
+    assert visible("2026-08-22")
+
+    # same-night rerun finds nothing: the price must go, today or not
+    price("2026-08-23")
+    assert visible("2026-08-23")
+    dbm.record_pair_probe(conn, h.id, "TLL", "AGP", out.isoformat(),
+                          back.isoformat(), "google_flights", "2026-08-23",
+                          found=False)
+    assert not visible("2026-08-23"), "a same-night tombstone still counts"
+
+    # ...but the 22nd did not know that yet
+    assert visible("2026-08-22"), "a tombstone must not rewrite the past"
+
+
+def test_a_probe_that_found_something_is_not_a_tombstone(cfg, tmp_path):
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+    dbm.upsert_observations(conn, h.id, [Observation(
+        origin="TLL", destination="AGP", out_date=out, back_date=back,
+        price_adult_eur=200.0, source="google_flights",
+        estimated_family_eur=800.0, is_direct=True)], seats=4,
+        night="2026-08-23")
+    dbm.record_pair_probe(conn, h.id, "TLL", "AGP", out.isoformat(),
+                          back.isoformat(), "google_flights", "2026-08-23",
+                          found=True)
+    assert opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg)
+
+
+def test_a_reader_obeys_the_mode_the_night_was_collected_in(cfg, tmp_path):
+    """Not the mode its own config file happens to hold.
+
+    A `--pairs-per-watch 1` run stored a partial rotation; the web container
+    then re-read the YAML, saw 0, and aged that data as a full-grid snapshot,
+    deleting most of what had just been collected. The run records its mode
+    and the reader obeys it.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+    dbm.upsert_observations(conn, h.id, [Observation(
+        origin="TLL", destination="AGP", out_date=out, back_date=back,
+        price_adult_eur=200.0, source="google_flights",
+        estimated_family_eur=800.0, is_direct=True)], seats=4,
+        night="2026-07-29")            # 25 nights before the as-of date
+
+    # this reader's config says full grid, which would age it out at 3 nights
+    assert cfg.sampler.get("pairs_per_watch", 0) == 0
+    assert opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg) == []
+
+    # but the night was actually collected by a rotating sampler
+    dbm.record_collection_mode(conn, "2026-07-29", pairs_per_watch=1)
+    rows = opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg)
+    assert len(rows) == 1, "the run's own mode decides, not the reader's config"
+    assert rows[0]["_from_night"] == "2026-07-29"

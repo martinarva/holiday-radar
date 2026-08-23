@@ -48,6 +48,10 @@ h3{font-size:15px;margin:0 0 8px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;
   padding:16px 18px}
 .grid{display:grid;gap:14px}
+/* A grid item defaults to min-width:auto, i.e. "never narrower than my
+   content". With td{white-space:nowrap} the Providers table could not shrink
+   into its column and spilled straight through the card's right border. */
+.grid>*{min-width:0}
 .g3{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -89,6 +93,9 @@ td{padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
 tr:last-child td{border-bottom:0}
 td.n,th.n{text-align:right}
 .scroll{overflow-x:auto}
+/* Wide content scrolls inside its own card rather than pushing the page
+   sideways or escaping the border. */
+.card{overflow-x:auto}
 .star{color:var(--acc)}
 
 /* opportunity rows */
@@ -713,7 +720,7 @@ async function viewSystem(el){
         .map(([k,c])=>`<tr><td>${esc(k)}</td><td class="n price">${c}</td></tr>`).join("")}</tbody></table></div>
     <div class="card"><h3>Providers</h3>
       <table><tbody>${s.providers.map(p=>`<tr><td>${esc(p.name)}</td>
-        <td class="mut small">${p.role}</td>
+        <td class="mut small">${esc(p.role)}</td>
         <td class="n"><span class="pill ${p.state==="healthy"?"good":p.state==="disabled"?"grey":"info"}">${p.state}</span></td></tr>`).join("")}</tbody></table></div>
   </div>`));
 

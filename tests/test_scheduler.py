@@ -546,3 +546,16 @@ def test_an_empty_google_answer_leaves_a_tombstone(cfg, tmp_path):
     assert len(probes) == 1
     assert probes[0]["found"] == 0
     assert probes[0]["source"] == "google_flights"
+
+
+def test_a_run_records_how_it_collected(cfg, tmp_path):
+    """So a separate reader process never has to guess from a config file."""
+    conn_path = tmp_path / "m.db"
+    run_nightly(cfg, conn_path, google_budget=1, audit_budget=0,
+                verify_budget=0, pairs_per_watch=2, workers=1,
+                log=lambda *_: None, google_search=_fake_google(), sleep_s=0,
+                collect=_fake_collect(cfg, n_blind=1, n_covered=0, dormant=0),
+                rng=random.Random(1))
+    conn = dbm.init_db(conn_path)
+    modes = dbm.collection_modes(conn)
+    assert list(modes.values()) == [2]
