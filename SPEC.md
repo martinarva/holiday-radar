@@ -39,6 +39,12 @@ on some upcoming school holiday — and on which flights."**
 
 - **Summer break** — a 2.5-month window is a separate (interesting) problem;
   v2 gets a "flexible 7–14 days in July" mode.
+- **Bargain alerts outside holidays** (owner request, 2026-08-23): when
+  somewhere gets *anomalously* cheap, alert regardless of climate and school
+  calendar — long-weekend material. A natural v2 mode: the origin-level
+  "anywhere" sources already exist (Ryanair fare finder, airBaltic overall,
+  Google), so this is mostly a second alert rule, not new plumbing. Not in
+  v1 to keep scope tight.
 - **Package holidays / charters** (tour operators) — invisible to flight APIs.
   A big channel for Baltic winter-sun trips, but that's a separate
   (promo-page) watcher, not v1. Honest limitation, see §8.
@@ -196,6 +202,15 @@ Checked 2026-08-23:
   dependency; network carriers (LOT/Lufthansa class — connections galore, but
   calendars poor for discovery) likely stay on the Google sampler. Live recon
   status: [docs/carrier-recon.md](docs/carrier-recon.md).
+  **Recon outcome (2026-08-23, all carriers probed): stage A =
+  airBaltic + Ryanair + coverage-aware Google sampler.** airBaltic was
+  admitted with the best source found anywhere — open JSON
+  (`/api/fsf/outbound|inbound|overall`, `/api/orig-dest/en`), per-day prices
+  + isDirect for arbitrary ranges in one GET, plain-curl friendly, covering
+  ~312/516 watches (RIX: 26 pool destinations, all direct). Wizz (1 pool
+  destination, PerimeterX), Norwegian (perfect endpoint behind a Cloudflare
+  wall), Finnair (Akamai-obfuscated transport) and all connectors failed the
+  gate and route to the sampler.
 - **Google Flights polite sampling** (fast-flights) for watches the carriers
   don't cover: 2–3 rotating date pairs per watch per week — the full window
   gets swept over days while nightly volume stays low. The sampler is
@@ -457,7 +472,13 @@ Confirmed 2026-08-23 (owner):
     "materially cheaper discovery than Google sampling". Only Ryanair is
     proven; Wizz Air heads the first recon batch; network carriers likely
     remain on the sampler. Recon matrix: docs/carrier-recon.md.
-11. **External review accepted (2026-08-23):** provider-agnostic observation
+11. **Carrier recon closed (2026-08-23):** every relevant TLL/HEL/RIX carrier
+    probed (browser network recon for the first batch, quick probes for
+    connectors). Admitted: **airBaltic** (open JSON, ~60% watch coverage,
+    RIX all-direct) alongside Ryanair. Rejected at the gate: Wizz (1 pool
+    destination), Norwegian (Cloudflare), Finnair (Akamai), all connectors
+    (no reachable calendar JSON). Full scorecard: docs/carrier-recon.md.
+12. **External review accepted (2026-08-23):** provider-agnostic observation
    model with `days_to_departure` stored from day one; top-K date pairs sent
    to verify; three-state climate (eligible/marginal/excluded) with a 0–10
    climate score as a ranking signal (hard filter opt-in); verification
