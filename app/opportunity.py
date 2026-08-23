@@ -192,6 +192,22 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
     }
 
 
+def _score_option(cfg: Config, dst: str, opt: dict, clim: dict, tier) -> None:
+    """Score one origin+date-pair candidate in place."""
+    m = opt["market"]
+    value = _value_score(cfg, dst, opt["effective_eur"], m.get("score"))
+    quality = (W_CLIMATE * (clim["score"] or 0)
+               + W_ITINERARY * _itinerary_score(opt["is_direct"], None)
+               + W_SCHOOL * _school_score(opt["school_days"])
+               + W_LOGISTICS * _logistics_score(opt["logistics_eur"]))
+    gate = price_gate(opt["effective_eur"], tier.notify_eur if tier else None)
+    cgate = CLIMATE_GATE.get(clim["status"], 0.5)
+    opt["score"] = round((W_VALUE * value + W_QUALITY * quality) * gate * cgate, 1)
+    opt["score_parts"] = {"value": round(value, 1), "quality": round(quality, 1),
+                          "price_gate": round(gate, 2), "climate_gate": cgate}
+    opt["reasons"] = _reasons(cfg, opt, clim, m)
+
+
 def _reasons(cfg: Config, opt: dict, clim: dict, market: dict) -> list[dict]:
     """The 'Why?' list — every recommendation must explain itself."""
     out = []
@@ -231,16 +247,23 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
     month = holiday_mid_month(holiday)
     origins = {o.code: o for o in cfg.origins}
 
-    # cheapest observation per (origin, destination) for the night
-    best_rows: dict[tuple[str, str], dict] = {}
+    # Every priced date pair for the night, grouped by (origin, destination).
+    # With full-grid sampling the CHEAPEST pair is often an edge pair (longest
+    # trip, school days), so scoring only that one made the ranking jumpy.
+    # We score every pair and let the best one represent its origin, while the
+    # cheapest is reported alongside — the same best/cheapest split the UI
+    # makes between destinations, applied to dates.
+    pair_rows: dict[tuple[str, str], dict[tuple[str, str], dict]] = {}
     if night:
         for r in conn.execute("""
             SELECT * FROM observations WHERE holiday_id=? AND observed_night=?
+              AND estimated_family_eur IS NOT NULL
         """, (holiday.id, night)):
             k = (r["origin"], r["destination"])
-            cur = best_rows.get(k)
+            pk = (r["out_date"], r["back_date"])
+            cur = pair_rows.setdefault(k, {}).get(pk)
             if cur is None or r["estimated_family_eur"] < cur["estimated_family_eur"]:
-                best_rows[k] = dict(r)
+                pair_rows[k][pk] = dict(r)
 
     states = {(r["origin"], r["destination"]): dict(r) for r in conn.execute(
         "SELECT * FROM watch_state WHERE holiday_id=?", (holiday.id,))}
@@ -260,24 +283,47 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
         dest_cfg = cfg.destination(dst)
         clim = _climate_block(cfg, dst, month, cache)
         any_state = states[(origin_codes[0], dst)]
+        tier_for_dst, _ = _tier_of(cfg, dst)
         options = []
         for og_code in origin_codes:
-            row = best_rows.get((og_code, dst))
-            if not row or row["estimated_family_eur"] is None:
-                continue
+            rows = pair_rows.get((og_code, dst)) or {}
             og = origins.get(og_code)
-            if og is None:
+            if not rows or og is None:
                 continue
-            opt = _origin_option(cfg, holiday, og, row, conn)
-            opt["_destination"] = dst
             hist = metrics.watch_history(conn, holiday.id, og_code, dst)
-            opt["trend"] = {"previous_eur": hist["previous_eur"],
-                            "delta_eur": hist["delta_eur"],
-                            "delta_pct": hist["delta_pct"],
-                            "nights": hist["nights_with_data"]}
-            opt["market"] = market_signal(conn, holiday.id, og_code, dst,
-                                          opt["effective_eur"])
-            options.append(opt)
+            trend = {"previous_eur": hist["previous_eur"],
+                     "delta_eur": hist["delta_eur"],
+                     "delta_pct": hist["delta_pct"],
+                     "nights": hist["nights_with_data"]}
+            cands = []
+            for row in rows.values():
+                opt = _origin_option(cfg, holiday, og, row, conn)
+                opt["_destination"] = dst
+                opt["trend"] = trend
+                opt["market"] = market_signal(conn, holiday.id, og_code, dst,
+                                              opt["effective_eur"])
+                _score_option(cfg, dst, opt, clim, tier_for_dst)
+                cands.append(opt)
+            best_pair = max(cands, key=lambda o: o["score"])
+            cheap_pair = min(cands, key=lambda o: o["effective_eur"])
+            zero_pairs = [c for c in cands if c["school_days"] == 0]
+            zero_pair = (min(zero_pairs, key=lambda o: o["effective_eur"])
+                         if zero_pairs else None)
+            best_pair["pairs_considered"] = len(cands)
+            # Whichever pair wins on score, the other two answers stay visible:
+            # a cheap edge pair must not hide the clean zero-school option, and
+            # a quality pair must not hide a materially cheaper one.
+            def _brief(c):
+                return {"out_date": c["out_date"], "back_date": c["back_date"],
+                        "nights": c["nights"],
+                        "effective_eur": c["effective_eur"],
+                        "school_days": c["school_days"],
+                        "is_direct": c["is_direct"]}
+            if cheap_pair is not best_pair:
+                best_pair["cheapest_pair"] = _brief(cheap_pair)
+            if zero_pair is not None and zero_pair is not best_pair:
+                best_pair["zero_school_pair"] = _brief(zero_pair)
+            options.append(best_pair)
 
         dormant = all(states[(c, dst)]["dormant"] for c in origin_codes)
         if not options:
@@ -300,25 +346,6 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
             continue
 
         # score every option, then pick the three canonical answers
-        tier, _ = _tier_of(cfg, dst)
-        for opt in options:
-            m = opt["market"]
-            value = _value_score(cfg, dst, opt["effective_eur"], m.get("score"))
-            quality = (W_CLIMATE * (clim["score"] or 0)
-                       + W_ITINERARY * _itinerary_score(opt["is_direct"], None)
-                       + W_SCHOOL * _school_score(opt["school_days"])
-                       + W_LOGISTICS * _logistics_score(opt["logistics_eur"]))
-            gate = price_gate(opt["effective_eur"],
-                              tier.notify_eur if tier else None)
-            cgate = CLIMATE_GATE.get(clim["status"], 0.5)
-            opt["score"] = round((W_VALUE * value + W_QUALITY * quality)
-                                 * gate * cgate, 1)
-            opt["score_parts"] = {"value": round(value, 1),
-                                  "quality": round(quality, 1),
-                                  "price_gate": round(gate, 2),
-                                  "climate_gate": cgate}
-            opt["reasons"] = _reasons(cfg, opt, clim, m)
-
         for opt in options:
             key, label = deal_label(cfg, dst, opt["effective_eur"])
             opt["deal_key"], opt["deal_label"] = key, label

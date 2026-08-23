@@ -93,3 +93,32 @@ def test_market_signal_needs_history(cfg, tmp_path):
     conn = dbm.init_db(tmp_path / "o.db")
     m = opp.market_signal(conn, "autumn-2026", "TLL", "AGP", 800.0)
     assert m["state"] == "collecting" and m["score"] is None
+
+
+def test_best_pair_wins_over_cheapest_edge_pair(cfg, tmp_path):
+    """Full-grid sampling surfaces cheap edge pairs (long trip, school days).
+    Scoring only the cheapest row made the ranking jumpy — every pair must be
+    scored, and the cheapest reported alongside."""
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    _seed(conn, cfg, [
+        # a clean 7-night, zero-school pair, slightly dearer
+        ("TLL", "AGP", 900.0, True, date(2026, 10, 25), date(2026, 11, 1),
+         "google_flights"),
+        # the cheapest cell: 11 nights and 3 school days
+        ("TLL", "AGP", 780.0, True, date(2026, 10, 23), date(2026, 11, 3),
+         "google_flights"),
+    ])
+    ops = opp.build(cfg, conn, h, night=NOW.date().isoformat(), climate_cache={})
+    agp = next(o for o in ops if o["destination"] == "AGP")
+    best = agp["best_option"]
+    # every pair is scored, not just the cheapest row
+    assert best["pairs_considered"] == 2
+    # EUR 120 legitimately outweighs 3 school days here, so the edge pair wins
+    # on score — but the clean zero-school option must stay visible, which is
+    # the part that used to disappear
+    assert best["school_days"] == 3
+    assert best["zero_school_pair"]["effective_eur"] == 900.0
+    assert best["zero_school_pair"]["school_days"] == 0
+    assert "cheapest_pair" not in best          # the winner IS the cheapest
+    assert agp["cheapest_option"]["effective_eur"] == 780.0
