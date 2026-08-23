@@ -29,16 +29,19 @@ def _conn(cfg: Config):
 
 
 def _best_by_watch(conn, holiday_id: str, night: str | None) -> dict:
-    """Cheapest observation per (origin, destination) for one night."""
-    if not night:
-        return {}
+    """Cheapest observation per (origin, destination), same rules as the UI.
+
+    This fed /api/holidays and /watches off its own one-night snapshot, so a
+    carried-over price the radar and detail views both showed was missing
+    here — the API disagreed with itself depending on which route you asked.
+    """
+    from app import opportunity as opp
+
     best: dict[tuple[str, str], dict] = {}
-    for o in conn.execute(
-            "SELECT * FROM observations WHERE observed_night=? AND holiday_id=?",
-            (night, holiday_id)):
+    for o in opp.latest_priced_rows(conn, holiday_id, night):
         k = (o["origin"], o["destination"])
         if k not in best or o["price_adult_eur"] < best[k]["price_adult_eur"]:
-            best[k] = dict(o)
+            best[k] = o
     return best
 
 
@@ -363,11 +366,13 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 "level": r["level"], "reason": r["reason"],
             }
             if r["level"] == "market-context":
-                # NOT a contradiction of the carrier fare: Google cannot price
-                # Ryanair, so this is the cheapest alternative — i.e. proof of
-                # how special the carrier fare is.
+                # NOT a contradiction of the carrier fare: Google indexes no
+                # ULCC, so this is the cheapest alternative it can see — i.e.
+                # proof of how special the carrier fare is. The wording stays
+                # carrier-agnostic; it used to say "non-Ryanair" over a Wizz
+                # fare.
                 item.update({
-                    "headline": "cheapest non-Ryanair alternative",
+                    "headline": "cheapest alternative Google can price",
                     "carrier_fare_eur": ind,
                     "alternative_eur": price,
                     "saving_vs_alternative_eur": (round(price - ind, 2)

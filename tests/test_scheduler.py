@@ -398,3 +398,24 @@ def test_a_failed_query_does_not_mark_a_watch_as_asked(cfg, tmp_path):
         "SELECT last_google_night FROM sampler_state"))
     assert all(r["last_google_night"] is None for r in rows), \
         "a watch whose query errored was never actually asked"
+
+
+def test_the_coverage_identity_counts_a_union_not_a_formula(cfg):
+    """One watch covered by two carriers is one covered watch.
+
+    Inclusion-exclusion over airBaltic + Ryanair + Wizz needs every pairwise
+    overlap; with a single airBaltic+Wizz watch the formula claimed 2.
+    """
+    from app.dryrun import compute_metrics
+
+    hols = {h.id: h for h in cfg.active_holidays()}
+    h = hols["autumn-2026"]
+    out, back = next(h.date_pairs())
+    r = WatchRow("autumn-2026", "TLL", "FCO", status="eligible", score=10.0,
+                 rule="warm_city")
+    r.bt_candidates = [_obs("TLL", "FCO", out, back, 400.0)]
+    r.wz_pair = _obs("TLL", "FCO", out, back, 170.0, source="wizzair")
+    s, _, _ = compute_metrics(cfg, hols, [r], TODAY, theoretical=1)
+    assert s["airbaltic_covered"] == 1 and s["wizzair_covered"] == 1
+    assert s["carrier_covered"] == 1, "one watch, however many carriers found it"
+    assert s["covered_direct"] + s["covered_1stop"] == s["carrier_covered"]

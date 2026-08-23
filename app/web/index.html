@@ -543,7 +543,8 @@ async function viewOpportunity(el, hid, dst){
     ${b.verify_mode === "carrier-direct" ? `
       <div class="small mut" style="margin-top:8px;border-left:2px solid var(--line);padding-left:10px">
         This fare comes straight from ${esc((b.airlines||["the carrier"])[0])}. Google Flights
-        does not price Ryanair, so a live check can only show what other airlines cost.</div>
+        does not index low-cost carriers, so a live check can only show what
+        other airlines cost.</div>
       <div class="row" style="margin-top:12px">
         <button class="btn" onclick="alert('Alternative-market check lands with E3.')">Check alternatives</button>
         <button class="btn ghost" onclick="alert('Tracking arrives with E3 alerts.')">♡ Track</button>
@@ -733,7 +734,7 @@ async function viewSystem(el){
     for(const x of v){
       const meaning = x.level === "market-context"
         ? `<span class="mut">carrier fare ${eur(x.carrier_fare_eur)} · alternative is
-           <b>${eur(x.saving_vs_alternative_eur)} more</b> — Google can't price Ryanair</span>`
+           <b>${eur(x.saving_vs_alternative_eur)} more</b> — Google can't price this carrier</span>`
         : (x.delta_eur==null ? "" : `<span style="color:${x.delta_eur<=0?"var(--good)":"var(--fair)"}">
            ${x.delta_eur>0?"+":""}${eur(x.delta_eur)} vs indicative</span>`);
       tb.append($(`<tr><td>${x.origin}→${x.destination}</td>

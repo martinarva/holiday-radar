@@ -408,3 +408,141 @@ def test_freshness_is_tracked_per_row_not_per_watch(cfg, tmp_path):
     # the fresh airBaltic row wins on price and is not marked stale
     assert agp["cheapest_option"]["source"] == "airbaltic"
     assert agp["cheapest_option"]["from_night"] is None
+
+
+def test_a_dearer_fare_can_be_the_cheaper_trip(cfg, tmp_path):
+    """Candidates must be costed before any of them is discarded.
+
+    Google's EUR 400 carries a EUR 110 layover hotel; airBaltic's EUR 450 is
+    nonstop. Keeping only the lowest FARE per date pair handed the win to the
+    EUR 510 trip over the EUR 450 one.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+
+    def obs(source, fam, direct, overnight):
+        dbm.upsert_observations(conn, h.id, [Observation(
+            origin="TLL", destination="AGP", out_date=out, back_date=back,
+            price_adult_eur=round(fam / 4, 2), source=source,
+            price_basis="family_quote", estimated_family_eur=fam,
+            is_direct=direct)], seats=4, night="2026-08-23")
+        if overnight:
+            conn.execute("""UPDATE observations SET max_layover_h=15.4,
+                            layover_overnight=1, layover_certain=1
+                            WHERE source=?""", (source,))
+            conn.commit()
+
+    obs("google_flights", 400.0, False, True)      # + EUR 110 room = 510
+    obs("airbaltic", 450.0, True, False)           # nonstop, all-in 450
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "TLL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "covered_direct"}])
+
+    agp = opp.build(cfg, conn, h, night="2026-08-23", climate_cache={})[0]
+    assert agp["cheapest_option"]["effective_eur"] == 450.0
+    assert agp["cheapest_option"]["source"] == "airbaltic"
+    assert agp["best_option"]["source"] == "airbaltic"
+
+
+def test_cheapest_option_sees_every_pair_not_just_the_best_scoring_one(cfg,
+                                                                       tmp_path):
+    """The per-origin representative must not shrink the cheapest search.
+
+    Recommended is the EUR 900 nonstop; the genuinely cheapest is a EUR 850
+    connection. cheapest_pair correctly said 850 while the top-level card
+    said 900, because the destination's cheapest was picked out of the
+    already-score-filtered list.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    _seed(conn, cfg, [
+        ("TLL", "AGP", 900.0, True, date(2026, 10, 26), date(2026, 11, 1),
+         "airbaltic"),                                       # nonstop
+        ("TLL", "AGP", 850.0, False, date(2026, 10, 25), date(2026, 11, 1),
+         "google_flights"),                                  # cheaper, 1 stop
+    ])
+    agp = opp.build(cfg, conn, h, night=NOW.date().isoformat(),
+                    climate_cache={})[0]
+    assert agp["cheapest_option"]["effective_eur"] == 850.0
+    assert agp["best_option"]["effective_eur"] == 900.0
+    assert agp["best_option"]["cheapest_pair"]["effective_eur"] == 850.0
+
+
+def test_throttle_mode_accumulates_the_grid_across_nights(cfg, tmp_path):
+    """With pairs_per_watch > 0 each night samples a different date pair.
+
+    Taking the source's newest night wholesale made tonight's single pair
+    delete every pair sampled earlier, so the rotating grid never built up.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+
+    def obs(out, back, fam, night):
+        dbm.upsert_observations(conn, h.id, [Observation(
+            origin="TLL", destination="AGP", out_date=out, back_date=back,
+            price_adult_eur=round(fam / 4, 2), source="google_flights",
+            price_basis="family_quote", estimated_family_eur=fam,
+            is_direct=True)], seats=4, night=night)
+
+    obs(date(2026, 10, 23), date(2026, 11, 1), 700.0, "2026-08-21")
+    obs(date(2026, 10, 25), date(2026, 11, 1), 900.0, "2026-08-22")
+    obs(date(2026, 10, 26), date(2026, 11, 1), 950.0, "2026-08-23")
+
+    rows = opp.latest_priced_rows(conn, h.id, "2026-08-23")
+    assert len(rows) == 3, "each date pair keeps its own most recent reading"
+    assert {r["out_date"] for r in rows} == {
+        "2026-10-23", "2026-10-25", "2026-10-26"}
+
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "TLL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "covered_direct"}])
+    agp = opp.build(cfg, conn, h, night="2026-08-23", climate_cache={})[0]
+    assert agp["cheapest_option"]["effective_eur"] == 700.0
+    assert agp["best_option"]["pairs_considered"] == 3
+
+
+def test_a_refresh_of_one_pair_does_not_resurrect_its_old_price(cfg, tmp_path):
+    """Per-pair latest must still be LATEST, not an accumulation of history."""
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+    for fam, night in ((700.0, "2026-08-22"), (950.0, "2026-08-23")):
+        dbm.upsert_observations(conn, h.id, [Observation(
+            origin="TLL", destination="AGP", out_date=out, back_date=back,
+            price_adult_eur=round(fam / 4, 2), source="google_flights",
+            price_basis="family_quote", estimated_family_eur=fam,
+            is_direct=True)], seats=4, night=night)
+    rows = opp.latest_priced_rows(conn, h.id, "2026-08-23")
+    assert [r["estimated_family_eur"] for r in rows] == [950.0]
+
+
+def test_a_half_known_itinerary_keeps_the_hotel_risk(cfg, tmp_path):
+    """Google gives the outbound departure and no return arrival.
+
+    Treating "one of the two is known" as settled dropped Helsinki's
+    late-return hotel risk from nearly every option on the board.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    hel = cfg.origin("HEL")
+    o = Observation(origin="HEL", destination="AGP",
+                    out_date=date(2026, 10, 26), back_date=date(2026, 11, 1),
+                    price_adult_eur=100.0, source="google_flights",
+                    price_basis="family_quote", estimated_family_eur=400.0,
+                    is_direct=True,
+                    raw={"times": {"out_departure": "2026-10-26T14:00",
+                                   "out_arrival": "2026-10-26T18:00",
+                                   "in_departure": None, "in_arrival": None}})
+    dbm.upsert_observations(conn, h.id, [o], seats=4, night="2026-08-23")
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "HEL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "covered_direct"}])
+    opt = opp.build(cfg, conn, h, night="2026-08-23",
+                    climate_cache={})[0]["best_option"]
+    assert opt["origin_hotel_eur"] is None      # nothing proven yet
+    assert opt["hotel_risk_eur"] == hel.hotel_eur, \
+        "the return arrival is unknown, so the risk still stands"

@@ -252,6 +252,10 @@ def compute_metrics(cfg: Config, hols: dict[str, Holiday],
     ry_cov = by(lambda r: r.ry_pair is not None)
     wz_cov = by(lambda r: r.wz_pair is not None)
     overlap = by(lambda r: bool(r.bt_candidates) and r.ry_pair is not None)
+    # The identity the exit gate checks. Inclusion-exclusion over a growing
+    # list of carriers needs every pairwise overlap; one airBaltic+Wizz watch
+    # made the formula say 2 where the truth was 1. Count the union instead.
+    carrier_covered = by(lambda r: r.covered)
 
     def zsd(r: WatchRow) -> bool:
         """Any priced pair costing no school days — from ANY carrier.
@@ -285,6 +289,7 @@ def compute_metrics(cfg: Config, hols: dict[str, Holiday],
         "dormant_not_on_sale": len(dormant),
         "airbaltic_covered": len(bt_cov), "ryanair_covered": len(ry_cov),
         "wizzair_covered": len(wz_cov),
+        "carrier_covered": len(carrier_covered),
         "overlap": len(overlap),
         "covered_direct": len(covered_direct),
         "covered_1stop": len(covered_1stop),

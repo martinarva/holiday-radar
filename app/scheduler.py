@@ -118,6 +118,12 @@ def offer_to_observation(cfg: Config, offer) -> Observation:
     )
 
 
+def _carrier_name(source: str) -> str:
+    """Display name for a source id, for text a human reads."""
+    from app.db import SOURCE_AIRLINE
+    return SOURCE_AIRLINE.get(source, source)
+
+
 def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 audit_budget: int = 2, verify_budget: int = 5,
                 pairs_per_watch: int = 1, workers: int = 1,
@@ -390,7 +396,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             break
         if dbm.recent_verification_exists(
                 conn, r.holiday_id, r.origin, r.destination,
-                o.out_date.isoformat(), o.back_date.isoformat()):
+                o.out_date.isoformat(), o.back_date.isoformat(), night=night):
             continue
         reason = f"indicative family {fam:.0f} <= 1.25 x notify"
         if o.source in ULCC_SOURCES:
@@ -413,8 +419,11 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 airlines=json.dumps(list(best.airlines)) if best else "[]",
                 legs=json.dumps(list(best.legs)) if best else "[]",
                 level="market-context",
-                reason=(reason + "; source=ryanair, not on Google — this is the "
-                        "cheapest non-Ryanair alternative, NOT a verification"),
+                # the ACTUAL carrier, not a hardcoded one: a Wizz-only watch
+                # was filed and displayed as "source=ryanair"
+                reason=(f"{reason}; source={o.source}, not on Google — this "
+                        f"is the cheapest alternative NOT flown by "
+                        f"{_carrier_name(o.source)}, NOT a verification"),
                 indicative_family_eur=fam, night=night)
             time.sleep(pace)
             continue

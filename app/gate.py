@@ -131,16 +131,17 @@ def run_checks(cfg: Config, db_path, min_runs: int = 3,
     theoretical = (len(cfg.active_holidays()) * len(cfg.origins)
                    * len(cfg.destinations))
     s, _, _ = compute_metrics(cfg, hols, relevant, date.today(), theoretical)
-    # Every admitted carrier counts. Omitting Wizz made a watch it covered
-    # look like an unexplained "covered" row and broke the identity.
-    carriers = (s["airbaltic_covered"] + s["ryanair_covered"]
-                + s.get("wizzair_covered", 0) - s["overlap"])
+    # A union, not inclusion-exclusion: with three carriers the formula needs
+    # every pairwise overlap, and one airBaltic+Wizz watch already made it
+    # claim 2 where the truth was 1.
+    carriers = s["carrier_covered"]
     inv = s["covered_direct"] + s["covered_1stop"] == carriers
     checks.append(Check(
         "DB-only coverage invariants hold", inv,
         f"direct {s['covered_direct']} + 1stop {s['covered_1stop']} vs "
-        f"bt {s['airbaltic_covered']} + ry {s['ryanair_covered']} + "
-        f"wz {s.get('wizzair_covered', 0)} - overlap {s['overlap']}"))
+        f"{carriers} watches covered by any carrier "
+        f"(bt {s['airbaltic_covered']}, ry {s['ryanair_covered']}, "
+        f"wz {s.get('wizzair_covered', 0)})"))
 
     conn.close()
     return checks

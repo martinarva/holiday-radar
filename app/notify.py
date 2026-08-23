@@ -224,13 +224,14 @@ def candidates(cfg: Config, conn, holiday, items: list[dict], night: str,
         return out
 
     for item in items:
-        opt = item.get("best_option")
-        if not opt or opt.get("effective_eur") is None:
-            continue
         # A price carried over from an earlier night is fine to SHOW — the UI
         # labels it — but it is not news, and a provider outage must not buzz
-        # a phone with a fare nobody re-checked. Alerts need tonight's data.
-        if opt.get("from_night"):
+        # a phone with a fare nobody re-checked. `best_fresh_option` is
+        # tonight's best; when the overall winner is stale it is a different
+        # option, and using it means a genuinely fresh find still gets
+        # announced instead of being hidden behind the stale one.
+        opt = item.get("best_fresh_option") or item.get("best_option")
+        if not opt or opt.get("effective_eur") is None or opt.get("from_night"):
             continue
         d = describe(cfg, holiday, item, opt)
         eff = d["effective_eur"]
@@ -408,12 +409,6 @@ def deliver(cfg: Config, conn, url: str | None = None, log=print,
     """
     if not _prefs(cfg).get("enabled", True):
         return None
-    url = url or webhook_url()
-    if not url:
-        # Not "delivered" — there is nowhere to deliver to. The caller must
-        # not record the slot as done, or a webhook configured later never
-        # flushes the queue.
-        raise NotifyError(f"{WEBHOOK_ENV} is not set")
     limit = int(_prefs(cfg).get("max_per_run", 5))
     latest = conn.execute(
         "SELECT MAX(observed_night) n FROM observations").fetchone()
@@ -421,7 +416,14 @@ def deliver(cfg: Config, conn, url: str | None = None, log=print,
         expire_stale(conn, latest["n"], cfg, log=log)
     queued = pending(conn)
     if not queued:
-        return None
+        return None          # nothing to say is a completed morning
+    # Only now does a webhook matter. Demanding one up front turned a quiet
+    # day with no HA_WEBHOOK_URL into a NotifyError, and the daemon retried
+    # every 30 minutes for the rest of the day over nothing.
+    url = url or webhook_url()
+    if not url:
+        raise NotifyError(f"{WEBHOOK_ENV} is not set, {len(queued)} alert(s) "
+                          "waiting")
     held = queued[limit:]
     batch = queued[:limit]
     payload = digest(batch)

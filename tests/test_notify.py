@@ -487,3 +487,86 @@ def test_the_payload_components_sum_to_the_price_it_advertises(cfg, tmp_path):
     components = (p["flights_eur"] + (p["logistics_eur"] or 0)
                   + (p["layover_hotel_eur"] or 0) + (p["origin_hotel_eur"] or 0))
     assert round(components, 2) == p["effective_eur"]
+
+
+def test_new_best_also_refuses_a_carried_over_price(cfg, tmp_path):
+    """The stale guard lived only in the buy/new-low loop.
+
+    Previous best was BCN; AGP's EUR 400 is a night old and only BCN
+    refreshed. A genuine new_best AGP alert went out carrying
+    from_night=2026-08-22.
+    """
+    conn = dbm.init_db(tmp_path / "n.db")
+    h = cfg.holiday("autumn-2026")
+    _seed(conn, cfg, "BCN", 500.0, "2026-08-22")
+    notify.queue(cfg, conn, h, _items(cfg, conn, h, "2026-08-22"),
+                 "2026-08-22", log=lambda *_: None)
+    conn.execute("UPDATE alerts SET status='sent', delivered=1")
+    conn.commit()
+
+    _seed(conn, cfg, "AGP", 400.0, "2026-08-22")     # stale by tonight
+    _seed(conn, cfg, "BCN", 900.0, "2026-08-23")     # only BCN refreshes
+    items = _items(cfg, conn, h, "2026-08-23")
+    agp = next(i for i in items if i["destination"] == "AGP")
+    assert agp["best_option"]["from_night"] == "2026-08-22", "fixture premise"
+
+    spy = Spy()
+    notify.send(cfg, conn, h, items, "2026-08-23", url="http://ha/hook",
+                poster=spy, log=lambda *_: None, now=NOW + timedelta(days=1))
+    for _, c in spy.calls:
+        assert not c.get("from_night"), f"stale alert sent: {c['kind']} {c['destination']}"
+
+
+def test_a_fresh_option_still_alerts_when_a_stale_one_outranks_it(cfg, tmp_path):
+    """Skipping the whole destination would silence real news.
+
+    Yesterday's Ryanair EUR 400 outranks tonight's airBaltic EUR 500, but the
+    EUR 500 is a genuine fresh find and must still be announced.
+    """
+    conn = dbm.init_db(tmp_path / "n.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+
+    def obs(source, fam, night):
+        dbm.upsert_observations(conn, h.id, [Observation(
+            origin="TLL", destination="AGP", out_date=out, back_date=back,
+            price_adult_eur=round(fam / 4, 2), source=source, observed_at=NOW,
+            price_basis="family_quote", estimated_family_eur=fam,
+            is_direct=True, raw={"airlines": [source]})], seats=4, night=night)
+
+    obs("ryanair", 400.0, "2026-08-22")
+    obs("airbaltic", 500.0, "2026-08-23")
+    dbm.write_watch_state(conn, [{
+        "holiday_id": h.id, "origin": "TLL", "destination": "AGP",
+        "status": "eligible", "score": 10.0, "rule": "beach",
+        "dormant": False, "coverage_class": "covered_direct"}])
+
+    items = _items(cfg, conn, h, "2026-08-23")
+    agp = items[0]
+    assert agp["cheapest_option"]["effective_eur"] == 400.0     # stale, shown
+    assert agp["best_fresh_option"]["effective_eur"] == 500.0   # tonight's
+
+    spy = Spy()
+    notify.send(cfg, conn, h, items, "2026-08-23", url="http://ha/hook",
+                poster=spy, log=lambda *_: None)
+    assert [c["effective_eur"] for _, c in spy.calls] == [500.0]
+
+
+def test_a_quiet_day_without_a_webhook_is_not_a_failure(cfg, tmp_path,
+                                                        monkeypatch):
+    """Checking the URL before the queue turned nothing-to-say into an error.
+
+    The daemon then retried every 30 minutes for the rest of the day over an
+    empty queue.
+    """
+    monkeypatch.delenv(notify.WEBHOOK_ENV, raising=False)
+    conn = dbm.init_db(tmp_path / "n.db")
+    assert notify.deliver(cfg, conn, log=lambda *_: None) is None
+
+    # ...but a queue with nowhere to go IS a failure worth retrying
+    h = cfg.holiday("autumn-2026")
+    _seed(conn, cfg, "AGP", 350.0, "2026-08-23")
+    notify.queue(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"),
+                 "2026-08-23", log=lambda *_: None)
+    with pytest.raises(notify.NotifyError):
+        notify.deliver(cfg, conn, log=lambda *_: None)

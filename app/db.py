@@ -556,7 +556,14 @@ def insert_verification(conn: sqlite3.Connection, *, holiday_id: str,
 
 def recent_verification_exists(conn: sqlite3.Connection, holiday_id: str,
                                origin: str, destination: str, out_date: str,
-                               back_date: str, within_nights: int = 3) -> bool:
+                               back_date: str, within_nights: int = 3,
+                               night: str | None = None) -> bool:
+    """Was this pair verified within the last `within_nights` nights?
+
+    `night` is the run's LOCAL date. Measuring the window from UTC "today"
+    disagreed with the locally-stamped verified_night at the 02:45 boundary
+    and held a candidate behind the cooldown for one night too long.
+    """
     r = conn.execute("""
         SELECT MAX(verified_night) n FROM verifications
         WHERE holiday_id=? AND origin=? AND destination=?
@@ -565,8 +572,8 @@ def recent_verification_exists(conn: sqlite3.Connection, holiday_id: str,
     if not r or not r["n"]:
         return False
     from datetime import date, timedelta
-    return date.fromisoformat(r["n"]) >= (
-        datetime.now(UTC).date() - timedelta(days=within_nights))
+    today = date.fromisoformat(night) if night else datetime.now(UTC).date()
+    return date.fromisoformat(r["n"]) >= (today - timedelta(days=within_nights))
 
 
 def write_watch_state(conn: sqlite3.Connection, rows: list[dict]) -> None:

@@ -250,15 +250,23 @@ def latest_priced_rows(conn, holiday_id: str, night: str | None,
     """
     if not night:
         return []
+    # Latest per (origin, destination, source, DATE PAIR). Grouping without
+    # the date pair works only for a full-grid night, where every pair is
+    # refreshed together. With `sampler.pairs_per_watch > 0` — the throttle
+    # mode the config still offers — tonight's single pair became the source's
+    # newest night and silently deleted every pair sampled on earlier nights,
+    # so the rotating grid never accumulated.
     sql = """
         SELECT o.* FROM observations o
-        JOIN (SELECT origin, destination, source, MAX(observed_night) n
+        JOIN (SELECT origin, destination, source, out_date, back_date,
+                     MAX(observed_night) n
                 FROM observations
                WHERE holiday_id=? AND observed_night<=?
                  AND estimated_family_eur IS NOT NULL {dst_inner}
-               GROUP BY origin, destination, source) latest
+               GROUP BY origin, destination, source, out_date, back_date) latest
           ON o.origin=latest.origin AND o.destination=latest.destination
-         AND o.source=latest.source AND o.observed_night=latest.n
+         AND o.source=latest.source AND o.out_date=latest.out_date
+         AND o.back_date=latest.back_date AND o.observed_night=latest.n
         WHERE o.holiday_id=? AND o.estimated_family_eur IS NOT NULL {dst_outer}
     """
     params: list = [holiday_id, night]
@@ -368,12 +376,16 @@ def _origin_option(cfg: Config, h: Holiday, og, row: dict,
         "verify_mode": ("carrier-direct" if row["source"] in ULCC_SOURCES
                         else "google-verifiable"),
         "extra_time_h": og.extra_time_h,
-        # A risk only while the clock times are unknown. Once they are known
-        # the answer is settled: either it is in effective_eur above, or the
-        # flight is at a civilised hour and there is no risk to advertise.
+        # A risk stands while EITHER relevant time is still unknown. Google
+        # publishes the outbound departure but no return arrival, which is the
+        # common case — treating "one of the two is known" as settled quietly
+        # dropped Helsinki's late-return hotel risk from almost every option.
         "hotel_risk_eur": ((og.hotel_eur or None)
-                           if not origin_hotel
-                           and not (times["out_departure"] or times["in_arrival"])
+                           if not origin_hotel and (
+                               (og.hotel_if_departure_before
+                                and not times["out_departure"])
+                               or (og.hotel_if_arrival_after
+                                   and not times["in_arrival"]))
                            else None),
         "verification": ({"level": verified["level"],
                           "price_total_eur": verified["price_total_eur"],
@@ -461,13 +473,15 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
     # database: BCN refreshes, AGP's provider fails, and AGP flips to
     # "scanning" as though nothing were known. Rows carry their age so the UI
     # can say how stale they are instead of pretending they do not exist.
-    pair_rows: dict[tuple[str, str], dict[tuple[str, str], dict]] = {}
+    # EVERY candidate survives to scoring. Collapsing to the lowest FARE per
+    # date pair first threw away the answer twice over: a Google EUR 400 with
+    # a EUR 110 layover hotel beat an airBaltic EUR 450 nonstop that was
+    # actually cheaper all-in, and a stale Ryanair EUR 400 displaced a fresh
+    # airBaltic EUR 500 — which then produced no alert, because the winner
+    # was carried over. Cost and quality decide, and they are not known yet.
+    pair_rows: dict[tuple[str, str], list[dict]] = {}
     for row in latest_priced_rows(conn, holiday.id, night):
-        k = (row["origin"], row["destination"])
-        pk = (row["out_date"], row["back_date"])
-        cur = pair_rows.setdefault(k, {}).get(pk)
-        if cur is None or row["estimated_family_eur"] < cur["estimated_family_eur"]:
-            pair_rows[k][pk] = row
+        pair_rows.setdefault((row["origin"], row["destination"]), []).append(row)
 
     states = {(r["origin"], r["destination"]): dict(r) for r in conn.execute(
         "SELECT * FROM watch_state WHERE holiday_id=?", (holiday.id,))}
@@ -498,8 +512,9 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
                           if (c, dst) in states), _UNWATCHED)
         tier_for_dst, _ = _tier_of(cfg, dst)
         options = []
+        every: list[dict] = []          # all scored candidates, all origins
         for og_code in origin_codes:
-            rows = pair_rows.get((og_code, dst)) or {}
+            rows = pair_rows.get((og_code, dst)) or []
             og = origins.get(og_code)
             if not rows or og is None:
                 continue
@@ -509,7 +524,7 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
                      "delta_pct": hist["delta_pct"],
                      "nights": hist["nights_with_data"]}
             cands = []
-            for row in rows.values():
+            for row in rows:
                 opt = _origin_option(cfg, holiday, og, row, conn)
                 opt["_destination"] = dst
                 # the night THIS row came from, when it is not tonight's
@@ -519,6 +534,7 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
                                               opt["flights_eur"])
                 _score_option(cfg, dst, opt, clim, tier_for_dst)
                 cands.append(opt)
+            every.extend(cands)
             best_pair = max(cands, key=lambda o: o["score"])
             cheap_pair = min(cands, key=lambda o: o["effective_eur"])
             zero_pairs = [c for c in cands if c["school_days"] == 0]
@@ -561,15 +577,21 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
             })
             continue
 
-        # score every option, then pick the three canonical answers
-        for opt in options:
+        # The canonical answers come from EVERY candidate, not from the one
+        # representative each origin contributes to the table. Picking the
+        # cheapest out of the already-score-filtered list reported EUR 900 as
+        # "cheapest" while a EUR 850 option sat one row below it.
+        for opt in every:
             key, label = deal_label(cfg, dst, opt["effective_eur"])
             opt["deal_key"], opt["deal_label"] = key, label
-        best = max(options, key=lambda o: o["score"])
-        cheapest = min(options, key=lambda o: o["effective_eur"])
-        zero_school = min((o for o in options if o["school_days"] == 0),
+        best = max(every, key=lambda o: o["score"])
+        cheapest = min(every, key=lambda o: o["effective_eur"])
+        zero_school = min((o for o in every if o["school_days"] == 0),
                           key=lambda o: o["effective_eur"], default=None)
-        best_market = max((o["market"].get("score") or -1) for o in options)
+        # what the alerting may speak about: tonight's data only
+        fresh = [o for o in every if not o.get("from_night")]
+        best_fresh = max(fresh, key=lambda o: o["score"]) if fresh else None
+        best_market = max((o["market"].get("score") or -1) for o in every)
 
         out.append({
             "holiday_id": holiday.id, "destination": dst,
@@ -579,6 +601,7 @@ def build(cfg: Config, conn, holiday: Holiday, night: str | None = None,
             "climate": clim, "state": "priced",
             "origin_options": sorted(options, key=lambda o: o["effective_eur"]),
             "best_option": best, "cheapest_option": cheapest,
+            "best_fresh_option": best_fresh,
             "zero_school_option": zero_school,
             "recommendation_score": best["score"],
             "market_score": best_market if best_market >= 0 else None,
