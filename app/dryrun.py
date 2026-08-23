@@ -78,8 +78,12 @@ def _google_weight(h: Holiday, today: date) -> float:
     return 0.05
 
 
-def run(cfg: Config, log=print, sleep_s: float = 0.12) -> tuple[dict, str]:
-    """Execute the dry run; returns (summary dict, markdown report)."""
+def run(cfg: Config, log=print, sleep_s: float = 0.12,
+        db_path=None) -> tuple[dict, str]:
+    """Execute the dry run; returns (summary dict, markdown report).
+    With db_path set, observations + watch state are persisted (E2-A)."""
+    from datetime import datetime, timezone
+    started_at = datetime.now(timezone.utc).isoformat()
     today = date.today()
     cache = climate.ensure_normals(cfg, log=log)
     hols = {h.id: h for h in cfg.active_holidays()}
@@ -168,7 +172,24 @@ def run(cfg: Config, log=print, sleep_s: float = 0.12) -> tuple[dict, str]:
                 og, ig, h, r.origin, r.destination)
         r.ry_pair = ry_fares.get((r.origin, r.holiday_id), {}).get(r.destination)
 
-    # --- metrics ---
+    summary, blind, best = compute_metrics(cfg, hols, relevant, today,
+                                           theoretical=len(rows))
+    summary["airbaltic_calls_per_night"] = n_calls
+
+    if db_path:
+        _persist(cfg, db_path, relevant, summary, started_at)
+        log(f"persisted to {db_path}")
+
+    md = _report_md(cfg, summary, hols, relevant, blind, best, today)
+    return summary, md
+
+
+def compute_metrics(cfg: Config, hols: dict[str, Holiday],
+                    relevant: list[WatchRow], today: date,
+                    theoretical: int) -> tuple[dict, list[WatchRow], list]:
+    """Pure metrics over assembled WatchRows — shared by the live dry run and
+    the DB-based recompute (E2-A), so coverage semantics cannot drift between
+    the two paths."""
     seats = cfg.passengers.seats
     by = lambda pred: [r for r in relevant if pred(r)]
     eligible = by(lambda r: r.status == climate.ELIGIBLE)
@@ -195,7 +216,6 @@ def run(cfg: Config, log=print, sleep_s: float = 0.12) -> tuple[dict, str]:
     zsd_covered = [r for r in covered if zsd(r)]
     google_budget = sum(_google_weight(hols[r.holiday_id], today) for r in blind)
 
-    # cheapest family candidates across everything (flavor for the report)
     best: list[tuple[float, WatchRow, Observation]] = []
     for r in covered:
         cands = list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
@@ -204,9 +224,9 @@ def run(cfg: Config, log=print, sleep_s: float = 0.12) -> tuple[dict, str]:
     best.sort(key=lambda t: t[0])
 
     summary = {
-        "theoretical": len(rows),
+        "theoretical": theoretical,
         "eligible": len(eligible), "marginal": len(marginal),
-        "excluded": len(rows) - len(relevant),
+        "excluded": theoretical - len(relevant),
         "dormant_not_on_sale": len(dormant),
         "airbaltic_covered": len(bt_cov), "ryanair_covered": len(ry_cov),
         "overlap": len(overlap),
@@ -215,9 +235,90 @@ def run(cfg: Config, log=print, sleep_s: float = 0.12) -> tuple[dict, str]:
         "blind_active": len(blind),
         "zero_school_day_covered": len(zsd_covered),
         "google_budget_per_night": round(google_budget, 1),
-        "airbaltic_calls_per_night": n_calls,
     }
+    return summary, blind, best
 
+
+def _persist(cfg: Config, db_path, relevant: list[WatchRow],
+             summary: dict, started_at: str) -> None:
+    from app import db as dbm
+    conn = dbm.init_db(db_path)
+    seats = cfg.passengers.seats
+    for r in relevant:
+        obs = list(r.bt_candidates) + ([r.ry_pair] if r.ry_pair else [])
+        if obs:
+            dbm.upsert_observations(conn, r.holiday_id, obs, seats)
+    dbm.write_watch_state(conn, [{
+        "holiday_id": r.holiday_id, "origin": r.origin,
+        "destination": r.destination, "status": r.status, "score": r.score,
+        "rule": r.rule, "dormant": r.dormant,
+        "coverage_class": r.coverage_class,
+    } for r in relevant])
+    dbm.record_run(conn, "dry-run", started_at, summary)
+    conn.close()
+
+
+def rows_from_db(cfg: Config, conn, night: str | None = None
+                 ) -> tuple[list[WatchRow], str | None]:
+    """Rebuild WatchRows from watch_state + one night's observations, so the
+    exact same compute_metrics() runs without any network."""
+    from datetime import datetime
+    from app import db as dbm
+    night = night or dbm.latest_night(conn)
+    rows: dict[tuple[str, str, str], WatchRow] = {}
+    for w in dbm.watch_state_rows(conn):
+        r = WatchRow(w["holiday_id"], w["origin"], w["destination"],
+                     status=w["status"], score=w["score"], rule=w["rule"],
+                     dormant=bool(w["dormant"]))
+        rows[(r.holiday_id, r.origin, r.destination)] = r
+    if night:
+        import json as _json
+        for o in dbm.observations_for_night(conn, night):
+            key = (o["holiday_id"], o["origin"], o["destination"])
+            r = rows.get(key)
+            if r is None:
+                continue
+            obs = Observation(
+                origin=o["origin"], destination=o["destination"],
+                out_date=date.fromisoformat(o["out_date"]),
+                back_date=date.fromisoformat(o["back_date"]),
+                price_adult_eur=o["price_adult_eur"], source=o["source"],
+                observed_at=datetime.fromisoformat(o["observed_at"]),
+                freshness_hours=o["freshness_hours"],
+                confidence=o["confidence"] or "exact-pair",
+                raw=_json.loads(o["raw_json"]) if o["raw_json"] else None,
+                price_basis=o["price_basis"],
+                source_price=o["source_price"],
+                estimated_family_eur=o["estimated_family_eur"],
+                is_direct=None if o["is_direct"] is None else bool(o["is_direct"]),
+            )
+            if obs.source == "ryanair":
+                if r.ry_pair is None or obs.price_adult_eur < r.ry_pair.price_adult_eur:
+                    r.ry_pair = obs
+            else:
+                r.bt_candidates.append(obs)
+    for r in rows.values():
+        r.bt_candidates.sort(key=lambda x: x.price_adult_eur)
+    return list(rows.values()), night
+
+
+def report_from_db(cfg: Config, db_path, night: str | None = None
+                   ) -> tuple[dict, str]:
+    """The E2-A requirement: the same coverage report, recomputed purely from
+    the database."""
+    from app import db as dbm
+    conn = dbm.init_db(db_path)
+    relevant, night = rows_from_db(cfg, conn, night)
+    conn.close()
+    if not relevant:
+        raise RuntimeError("no watch_state in DB — run dry-run first")
+    hols = {h.id: h for h in cfg.active_holidays()}
+    today = date.today()
+    theoretical = (len(cfg.active_holidays()) * len(cfg.origins)
+                   * len(cfg.destinations))
+    summary, blind, best = compute_metrics(cfg, hols, relevant, today,
+                                           theoretical=theoretical)
+    summary["source"] = f"db:{night}"
     md = _report_md(cfg, summary, hols, relevant, blind, best, today)
     return summary, md
 
@@ -248,7 +349,9 @@ def _report_md(cfg, s, hols, relevant, blind, best, today) -> str:
         f"| **blind & active → Google sampler** | **{s['blind_active']}** |",
         f"| Zero-school-day pair priced (of covered) | {s['zero_school_day_covered']}/{s['covered_direct'] + s['covered_1stop']} |",
         f"| **Required Google budget** (horizon-weighted, active blind only) | **≈ {s['google_budget_per_night']}/night** vs sampler cap 30 |",
-        f"| airBaltic request cost of this pass | {s['airbaltic_calls_per_night']} GETs (the real nightly shape) |",
+        (f"| airBaltic request cost of this pass | {s['airbaltic_calls_per_night']} GETs (the real nightly shape) |"
+         if "airbaltic_calls_per_night" in s else
+         f"| Source | recomputed from {s.get('source', 'db')} (no network) |"),
         "",
         "## Per holiday",
         "",

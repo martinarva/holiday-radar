@@ -185,7 +185,8 @@ def cmd_climate_fetch(cfg: Config, args) -> None:
 
 def cmd_dry_run(cfg: Config, args) -> None:
     from app import dryrun
-    summary, md = dryrun.run(cfg)
+    db_path = None if args.no_db else (cfg.base_dir / args.db)
+    summary, md = dryrun.run(cfg, db_path=db_path)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(md)
@@ -193,6 +194,21 @@ def cmd_dry_run(cfg: Config, args) -> None:
     for k, v in summary.items():
         print(f"  {k}: {v}")
     print(f"\nreport written: {out}")
+
+
+def cmd_coverage_report(cfg: Config, args) -> None:
+    """E2-A proof: the same report, recomputed purely from the DB."""
+    from app import dryrun
+    summary, md = dryrun.report_from_db(cfg, cfg.base_dir / args.db,
+                                        night=args.night)
+    print("=== SUMMARY (from DB, no network) ===")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(md)
+        print(f"report written: {out}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -230,6 +246,15 @@ def main(argv: list[str] | None = None) -> None:
     pdr = sub.add_parser("dry-run",
                          help="E1-E milestone: full stage-A pass + coverage report")
     pdr.add_argument("--out", default="docs/dryrun-report.md")
+    pdr.add_argument("--db", default="data/radar.db")
+    pdr.add_argument("--no-db", action="store_true",
+                     help="skip persistence (pre-E2 behaviour)")
+
+    pcr = sub.add_parser("coverage-report",
+                         help="recompute the coverage report from the DB (no network)")
+    pcr.add_argument("--db", default="data/radar.db")
+    pcr.add_argument("--night", default=None, help="YYYY-MM-DD (default: latest)")
+    pcr.add_argument("--out", default=None)
 
     pb = sub.add_parser("benchmark", help="E0 gate: TP coverage + error vs verify")
     pb.add_argument("--max-dest", type=int, default=15)
@@ -263,6 +288,7 @@ def main(argv: list[str] | None = None) -> None:
          "probe-airbaltic": cmd_probe_airbaltic,
          "climate-fetch": cmd_climate_fetch,
          "dry-run": cmd_dry_run,
+         "coverage-report": cmd_coverage_report,
          "probe-google": cmd_probe_google,
          "probe-travelpayouts": cmd_probe_tp,
          "benchmark": cmd_benchmark,

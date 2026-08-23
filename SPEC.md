@@ -221,7 +221,9 @@ Checked 2026-08-23:
   sampled rarely while autumn-2026 at 64 days out gets most of the budget.
   Within a watch, date pairs are NOT swept round-robin — sampling order:
   (1) zero-school-day pairs, (2) 7–9-night pairs, (3) representatives of
-  weekend/weekday combinations, (4) edge pairs last.
+  weekend/weekday combinations, (4) edge pairs last. An **exploration floor**
+  guarantees every active relevant blind watch at least one observation per
+  14 days, so low-priority watches never starve (review 2026-08-23).
 - **Travelpayouts** — strictly **optional** and default-off after E0.1 (0/8
   discovery-hint value): with no token, or with TP gone entirely, the radar
   runs identically.
@@ -430,8 +432,37 @@ The human decides ("€300 cheaper, but 9 h of extra logistics with two kids?").
     airBaltic-covered / Ryanair-covered / overlap / blind → Google sampler /
     estimated google budget per night`. (airBaltic's ~60% *theoretical*
     coverage may shift materially once the watchlist is climate-derived.)
-- **E2 — radar:** stage-A pipeline + history + dashboard price table with
-  trends.
+- **E2 — radar pipeline** (order per review 2026-08-23; dashboard is NOT
+  first):
+  - **E2-A — persistence:** SQLite schema + migrations; observation
+    upsert/append semantics (one row per watch × source × date pair per
+    NIGHT — reruns update, never duplicate); today's dry-run observations
+    written to the DB and the SAME coverage report recomputable from the DB
+    without network.
+  - **E2-B — opportunity scheduler:** carrier jobs + dormant activation +
+    Google priority queue with `priority = urgency × blindness × staleness ×
+    climate × pair_quality × exploration`; nightly budget stays **30**
+    (decision: computed demand ≈48 is a cadence wish, not a system minimum —
+    information value decides, no "full sweep every N days" promise); an
+    **exploration floor** guarantees every active relevant blind watch ≥1
+    observation per 14 days (protects against priority local optima).
+    A provider failure must never abort the whole run.
+  - **E2-C — history/market metrics:** best-current, previous, trend,
+    staleness, initial 60-day baseline and `market_score`
+    (`days_to_departure` already collected).
+  - **E2-D — API/dashboard:** `/radar`: holiday → destination → origin →
+    price/date/trend/climate/source/age/school-days; verify button may stay
+    a placeholder until E3.
+  - **E2-E — operationalization:** Docker scheduler, health/status,
+    per-provider last-success, debug snapshots, restart resilience.
+  - **E2 exit gate — a 72 h unattended run:** ≥3 nightly cycles; a restart
+    mid-run; one provider artificially failed; one dormant-transition test;
+    budget never exceeds 30; zero duplicate observations; the dashboard
+    rebuilds correct state from the DB alone.
+  - Coverage invariants live in tests (they held live on 2026-08-23:
+    airBaltic 85 + Ryanair 12 − overlap 8 = 89 covered = 43 direct +
+    46 one-stop; 79/89 with a zero-school-day priced pair) — pipeline
+    refactors must not silently change coverage semantics.
 - **E3 — verify + alerts:** stage B, deal score, thresholds, HA device +
   sensors + push notifications + digest.
 - **E4 — polish:** adopt lifecycle, score/threshold tuning against collected
