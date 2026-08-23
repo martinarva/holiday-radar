@@ -49,8 +49,14 @@ is proven (E0, Aug 2026):
 - ✅ Open-Meteo climate normals — filter mechanism validated
 - ✅ fast-flights (Google Flights) — works from EU IPs after a
   privacy-preserving consent handshake (built in)
-- ⏳ Travelpayouts coverage measurement (needs a free token)
-- 🔜 E1 foundation (watchlist derivation) → E2 radar pipeline → E3 alerts/HA
+- ✅ Travelpayouts measured — and **rejected** from the critical path
+  (E0 gate: 9% in-window coverage; E0.1: cheap hints don't correlate with
+  bookable family prices — mostly virtual-interline artifacts). The adapter
+  stays, strictly optional.
+- ✅ SearchApi.io hosted backup wired, cross-validated against fast-flights
+  (identical itinerary, identical price)
+- 🔜 E1: carrier mini-gates (airBaltic, Norwegian, Finnair) → climate
+  normals + watchlist derivation → E2 radar pipeline → E3 alerts/HA
 
 ## Quick start (development)
 
@@ -104,7 +110,8 @@ soft and the rest keeps working.
 ## Roadmap
 
 - [x] E0 — source spike (keyless parts)
-- [ ] E0 — Travelpayouts coverage measurement
+- [x] E0 — Travelpayouts benchmark → **call C** (off the critical path;
+      E0.1 discovery-value test confirmed: 0/8 useful hints)
 - [ ] E1 — foundation: config, presets, climate normals, watchlist derivation
 - [ ] E2 — radar pipeline, price history, dashboard
 - [ ] E3 — verification, deal score, MQTT/Home Assistant alerts, digest

@@ -167,14 +167,14 @@ Checked 2026-08-23:
 | **Travelpayouts Data API** (Aviasales cache) | official, token | free (affiliate account) | ~~stage A core~~ → **demoted by the E0 gate (2026-08-23): opportunistic hint layer only** (`transfers ≤ 1` filter) | measured: 9% in-window coverage on our market; cheapest entries often 2-stop self-transfer combos a family can't use |
 | **Ryanair fare finder** (`services-api.ryanair.com/farfnd/v4/roundTripFares`) | public JSON, unofficial | free, keyless | Stage A LCC supplement: cheapest RT across a whole window in one request; also "cheapest destinations from airport" | unofficial → may change; fail soft |
 | **fast-flights** (Google Flights, protobuf) | scraper library, maintained 2026 | free | **Stage B verify** on the exact date pair | ToS-gray wrt Google (personal, low volume); library dependency |
-| **SerpAPI** | official | 250 searches/mo free | Stage B alternative — 250/mo ≈ exactly the verify budget (~8/day) | volume doesn't scale to breadth |
+| **Hosted SERP APIs** (SearchApi.io / SerpApi.com) | official, key | SearchApi: 100 one-time credits, ~$40/mo=10k · SerpApi: 100/mo free | stage-B backup; paid tier could carry the whole sampler | costs money at scale; same Google data fast-flights gets free |
 | ~~Amadeus Self-Service~~ | — | — | — | **closed to new signups 2026-07-17** — out |
 | ~~Kiwi Tequila~~, ~~Skyscanner~~ | — | — | — | partner-only for years — out |
 
 **Request budget** (4 holidays × 3 origins × ~15 destinations):
 - Stage A: Travelpayouts ~180–360 cached queries nightly (free, spread out) +
   Ryanair ~15–40 (only its routes).
-- Stage B: ≤ 10 verify searches/day (fast-flights; SerpAPI as backup).
+- Stage B: ≤ 10 verify searches/day (fast-flights; hosted SERP API as backup).
 - **Total cost: €0.** Polite volume, house-style graceful failure everywhere.
 
 **Stage-A composition after the E0 gate (call C, ratified 2026-08-23):**
@@ -190,9 +190,20 @@ Checked 2026-08-23:
   **coverage-aware from day one**: a watch with a fresh carrier signal needs
   less Google; a completely blind watch gets priority from the sampling
   budget — the same request volume, spent smarter.
-- **Travelpayouts** — strictly **optional** hint layer (free, `transfers ≤ 1`),
-  never a dependency: with no token, or with TP gone entirely, the radar runs
-  identically. **SerpAPI** stays the stage-B backup (250/mo ≈ verify budget).
+- **Travelpayouts** — strictly **optional** and default-off after E0.1 (0/8
+  discovery-hint value): with no token, or with TP gone entirely, the radar
+  runs identically.
+- **Hosted Google-Flights SERP APIs as the reliability backup.** Two vendors,
+  same product class ("SERP API" is a generic term): **SearchApi.io** (owner
+  has an account — 100 one-time free credits; paid ~$40/mo = 10k searches;
+  native fast-flights integration + our adapter, cross-validated live: it
+  returned the identical Finnair itinerary at the identical price as
+  fast-flights) and **SerpApi.com** (a separate company; 100 searches/month
+  recurring free; paid tiers pricier). Roles: occasional stage-B fallback on
+  the free credits; a paid tier (10k ≈ 330/day) would carry the entire
+  sampler + verify with ~2× headroom — a pure reliability upgrade via a
+  config provider swap, worth paying only if fast-flights maintenance ever
+  becomes a real burden.
 
 ### D. Verify, deal score and thresholds
 
@@ -336,6 +347,25 @@ The human decides ("€300 cheaper, but 9 h of extra logistics with two kids?").
   book, so they'd generate false super-deal alerts that verify then kills.
   Consequence: stage A rebuilt around carrier sources (see §4C); TP demoted
   to a hint layer. **E1 is unblocked.**
+
+  **E0.1 addendum (same day, on reviewer challenge):** before final judgment
+  we tested TP's *discovery value* separately from exact-window coverage —
+  maybe "HEL→AGP looks cheap around then" is useful even when the exact pair
+  isn't cached. Findings (autumn-2026, 45 pairs, 233 observations):
+  stops mix 0 direct / 92 one-stop / 141 two-plus; usable in-window ≤1-stop
+  observations existed on only 8/45 pairs; and the key test — the 8 cheapest
+  ≤1-stop hints verified against Google (≤1 stop, family) — scored **0/8
+  useful**, with TP understating real bookable family prices by +31…+267%
+  (median ≈ +130%) and *no* rank correlation (TP's cheapest hint mapped to
+  the most expensive verified price). Even "1-transfer" TP entries turn out
+  to be OTA/virtual-interline products (Gotogate/Kiwi gates), not the family
+  itinerary we'd book. Origin-level discovery endpoints (`v1/city-directions`,
+  `v2/prices/latest` origin-only, `v2/prices/month-matrix` with a
+  `number_of_changes` field) all work and remain documented here for
+  completeness — but the signal quality doesn't justify even a default-on
+  hint layer. **Final: TP adapter stays in the repo as strictly optional and
+  default-off. The C call is closed with the discovery question answered,
+  not skipped.**
 - **E1 — foundation:** opens with a **carrier mini-gate** for airBaltic,
   Norwegian and Finnair — `endpoint exists → window query possible → prices
   sane → parser test → adapter in`. A carrier that fails the gate routes its
@@ -393,8 +423,10 @@ Confirmed 2026-08-23 (owner):
 8. **E0 gate closed (2026-08-23): call C — Travelpayouts off the critical
    path** (9% coverage, self-transfer product mismatch; full numbers in §7).
    Stage A = Ryanair + carrier low-fare calendars (airBaltic, Norwegian,
-   Finnair — E1 spikes) + polite Google sampling; TP kept as a filtered hint
-   layer only.
+   Finnair — E1 spikes) + polite Google sampling. **E0.1 (same day) also
+   closed the discovery-value question: 0/8 cheap TP hints led to a real
+   bookable family price anywhere near threshold, no rank correlation → TP
+   adapter is strictly optional and default-off, not even a hint layer.**
 9. **E1 directives (owner, 2026-08-23, E0 closed at confidence 0.98):**
    stage A is *carrier-first discovery* (Ryanair + airBaltic + Norwegian +
    Finnair → Google rotating sampler); each new carrier passes the mini-gate

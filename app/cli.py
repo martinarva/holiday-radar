@@ -108,6 +108,33 @@ def cmd_benchmark(cfg: Config, args) -> None:
     benchmark.summarize(results, verified)
 
 
+def cmd_probe_searchapi(cfg: Config, args) -> None:
+    from app.providers import searchapi
+    key = searchapi.key_from_env()
+    if not key:
+        _fail("SEARCHAPI_KEY not set (put it in .env)")
+    offers = searchapi.search_round_trip(
+        args.origin, args.dest,
+        date.fromisoformat(args.out), date.fromisoformat(args.back),
+        adults=cfg.passengers.adults, children=cfg.passengers.children,
+        key=key, currency=cfg.currency)
+    print(f"{len(offers)} offers via SearchApi (family total, 1 credit used):")
+    for o in offers[:6]:
+        print(f"  {o.price_total_eur:8.0f} €  {'+'.join(o.airlines) or '?':<24.24s} "
+              f"{' '.join(o.legs)}")
+
+
+def cmd_diagnose_tp(cfg: Config, args) -> None:
+    from app import benchmark
+    from app.providers import travelpayouts as tp
+    token = tp.token_from_env()
+    if not token:
+        _fail("TRAVELPAYOUTS_TOKEN not set (put it in .env)")
+    benchmark.diagnose_tp(cfg, token, holiday_id=args.holiday,
+                          max_destinations=args.max_dest,
+                          verify_sample=args.verify_sample)
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="holiday-radar")
     p.add_argument("--config", default="config.yaml")
@@ -134,6 +161,19 @@ def main(argv: list[str] | None = None) -> None:
     pb.add_argument("--max-dest", type=int, default=15)
     pb.add_argument("--verify-sample", type=int, default=6)
 
+    pd = sub.add_parser("diagnose-tp",
+                        help="E0.1: TP discovery value (stops classes, hint->Google)")
+    pd.add_argument("--holiday", default="autumn-2026")
+    pd.add_argument("--max-dest", type=int, default=15)
+    pd.add_argument("--verify-sample", type=int, default=8)
+
+    ps = sub.add_parser("probe-searchapi",
+                        help="verify one date pair via SearchApi.io (1 credit)")
+    ps.add_argument("--origin", required=True)
+    ps.add_argument("--dest", required=True)
+    ps.add_argument("--out", required=True, help="YYYY-MM-DD")
+    ps.add_argument("--back", required=True, help="YYYY-MM-DD")
+
     args = p.parse_args(argv)
     cfg = load_config(args.config)
     try:
@@ -141,7 +181,9 @@ def main(argv: list[str] | None = None) -> None:
          "probe-ryanair": cmd_probe_ryanair,
          "probe-google": cmd_probe_google,
          "probe-travelpayouts": cmd_probe_tp,
-         "benchmark": cmd_benchmark}[args.cmd](cfg, args)
+         "benchmark": cmd_benchmark,
+         "diagnose-tp": cmd_diagnose_tp,
+         "probe-searchapi": cmd_probe_searchapi}[args.cmd](cfg, args)
     except ProviderError as e:
         _fail(str(e))
 

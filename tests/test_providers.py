@@ -82,3 +82,36 @@ def test_months_span_single_and_cross_month():
     assert months_span((d(2026, 10, 23), d(2026, 10, 28))) == ["2026-10"]
     assert months_span((d(2026, 10, 30), d(2026, 11, 4))) == ["2026-10", "2026-11"]
     assert months_span((d(2026, 12, 18), d(2027, 1, 6))) == ["2026-12", "2027-01"]
+
+
+SEARCHAPI_FIXTURE = {
+    "best_flights": [
+        {"price": 1312, "flights": [
+            {"airline": "Finnair",
+             "departure_airport": {"airport_code": "TLL"},
+             "arrival_airport": {"airport_code": "HEL"}},
+            {"airline": "Finnair",
+             "departure_airport": {"airport_code": "HEL"},
+             "arrival_airport": {"airport_code": "AGP"}}]},
+    ],
+    "other_flights": [
+        {"price": "1408", "flights": [
+            {"airline": "Finnair",
+             "departure_airport": {"airport_code": "TLL"},
+             "arrival_airport": {"airport_code": "HEL"}},
+            {"airline": "Finnair",
+             "departure_airport": {"airport_code": "HEL"},
+             "arrival_airport": {"airport_code": "AGP"}}]},
+        {"price": None, "flights": []},   # malformed entry must be skipped
+    ],
+}
+
+
+def test_searchapi_parse_sorted_and_resilient():
+    from app.providers.searchapi import parse_offers
+    offers = parse_offers(SEARCHAPI_FIXTURE, "tll", "agp",
+                          date(2026, 10, 26), date(2026, 11, 1))
+    assert [o.price_total_eur for o in offers] == [1312.0, 1408.0]
+    assert offers[0].legs == ("TLL-HEL", "HEL-AGP")
+    assert offers[0].airlines == ("Finnair",)
+    assert offers[0].source == "searchapi"
