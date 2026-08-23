@@ -164,7 +164,7 @@ Checked 2026-08-23:
 
 | Source | Type | Cost | Role | Risk |
 |---|---|---|---|---|
-| **Travelpayouts Data API** (Aviasales cache) | official, token | free (affiliate account) | **Stage A core**: date grid + cheapest-by-destination in one request | cache up to 7 days old; TLL coverage needs the E0 check |
+| **Travelpayouts Data API** (Aviasales cache) | official, token | free (affiliate account) | ~~stage A core~~ → **demoted by the E0 gate (2026-08-23): opportunistic hint layer only** (`transfers ≤ 1` filter) | measured: 9% in-window coverage on our market; cheapest entries often 2-stop self-transfer combos a family can't use |
 | **Ryanair fare finder** (`services-api.ryanair.com/farfnd/v4/roundTripFares`) | public JSON, unofficial | free, keyless | Stage A LCC supplement: cheapest RT across a whole window in one request; also "cheapest destinations from airport" | unofficial → may change; fail soft |
 | **fast-flights** (Google Flights, protobuf) | scraper library, maintained 2026 | free | **Stage B verify** on the exact date pair | ToS-gray wrt Google (personal, low volume); library dependency |
 | **SerpAPI** | official | 250 searches/mo free | Stage B alternative — 250/mo ≈ exactly the verify budget (~8/day) | volume doesn't scale to breadth |
@@ -177,13 +177,19 @@ Checked 2026-08-23:
 - Stage B: ≤ 10 verify searches/day (fast-flights; SerpAPI as backup).
 - **Total cost: €0.** Polite volume, house-style graceful failure everywhere.
 
-Two provider sets in config (`providers`):
-- **Variant A (default):** Travelpayouts + Ryanair (stage A), fast-flights
-  (stage B), SerpAPI (backup).
-- **Variant B (keyless):** Ryanair + fast-flights sampling (stage A is
-  narrower — LCC routes + manually pinned must-watches), fast-flights
-  (stage B). Works, but coverage is notably thinner — the fallback if
-  Travelpayouts ever goes away.
+**Stage-A composition after the E0 gate (call C, ratified 2026-08-23):**
+- **Ryanair fare finder** — proven: whole-window cheapest per destination in
+  one keyless request (RIX 21 / HEL 10 / TLL 6 destinations).
+- **Carrier low-fare calendars** (E1 opens with a spike on each): **airBaltic**
+  (the TLL/RIX workhorse), **Norwegian** (HEL → Canaries/Med), **Finnair**
+  (HEL long-haul & winter sun). Same shape as the Ryanair adapter: keyless
+  JSON their own sites use, honestly bookable fares.
+- **Google Flights polite sampling** (fast-flights) for watches the carriers
+  don't cover: 2–3 rotating date pairs per watch per week — the full window
+  gets swept over days while nightly volume stays low.
+- **Travelpayouts** — hint layer only (free, `transfers ≤ 1`), never the
+  primary signal; **SerpAPI** stays the stage-B backup (250/mo ≈ verify
+  budget).
 
 ### D. Verify, deal score and thresholds
 
@@ -315,6 +321,18 @@ The human decides ("€300 cheaper, but 9 h of extra logistics with two kids?").
   Google sampling together form stage A) /
   **C — TP reject** (coverage/quality too poor → remove from the critical
   path before E1; stage-A strategy changes, the product does not).
+
+  **GATE CLOSED 2026-08-23 — call: C (ratified by owner).** Measured over 180
+  watches (4 holidays × 3 origins × 15 destinations, 0 API errors):
+  in-window coverage **9%** (any-observation 29%), 164 watches with no usable
+  stage-A signal, cache age median 96 h / max 168 h, price error vs Google
+  verify sample median **+171%** / p90 +193%. Root causes: (1) thin cache on
+  a small Baltic market for our specific windows — fundamental; (2) product
+  mismatch — TP's cheapest entries are frequently 2-stop *self-transfer*
+  combos (e.g. TLL-ARN-GDN-AGP at €166/adult) that a 2+2 family wouldn't
+  book, so they'd generate false super-deal alerts that verify then kills.
+  Consequence: stage A rebuilt around carrier sources (see §4C); TP demoted
+  to a hint layer. **E1 is unblocked.**
 - **E1 — foundation:** config model, holiday presets 2026–2030, destination
   pool (~40–70), Open-Meteo normals, watchlist derivation + a preview
   ("what I would watch and why" — climate justification per row).
@@ -364,7 +382,12 @@ Confirmed 2026-08-23 (owner):
    (`TRAVELPAYOUTS_TOKEN`). E0 finishes with the TP coverage measurement.
 7. **Language:** repo, code, commits and docs in English; project
    communication may be in Estonian.
-8. **External review accepted (2026-08-23):** provider-agnostic observation
+8. **E0 gate closed (2026-08-23): call C — Travelpayouts off the critical
+   path** (9% coverage, self-transfer product mismatch; full numbers in §7).
+   Stage A = Ryanair + carrier low-fare calendars (airBaltic, Norwegian,
+   Finnair — E1 spikes) + polite Google sampling; TP kept as a filtered hint
+   layer only.
+9. **External review accepted (2026-08-23):** provider-agnostic observation
    model with `days_to_departure` stored from day one; top-K date pairs sent
    to verify; three-state climate (eligible/marginal/excluded) with a 0–10
    climate score as a ranking signal (hard filter opt-in); verification
