@@ -48,7 +48,10 @@ preferences:
     min_drop_pct: 5                    # a re-alert must beat the last by both
     min_drop_eur: 40                   # a share AND an absolute amount
     repeat_after_days: 14              # ...or simply be this stale
-    max_per_run: 5
+    # One digest carries them all, so this only truncates the news. It was 5
+    # from when each alert was its own push; at that size half a night's
+    # finds expired unsent.
+    max_per_run: 20
     # The night decides at 02:45; this is when the phone actually buzzes,
     # as one digest rather than a handful of separate pushes.
     deliver_cron: "0 7 * * *"

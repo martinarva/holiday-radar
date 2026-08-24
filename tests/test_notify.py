@@ -173,15 +173,17 @@ def test_a_failed_push_never_aborts_the_night_or_is_recorded_as_sent(cfg, tmp_pa
 
 
 def test_the_per_run_cap_holds(cfg, tmp_path):
+    """The mechanism, not this week's number — the cap is a config value."""
     conn = dbm.init_db(tmp_path / "n.db")
     h = cfg.holiday("autumn-2026")
+    cfg.preferences["alerts"]["max_per_run"] = 3
     for dst in ("AGP", "BCN", "ALC", "PMI", "IBZ", "TIA", "MLA"):
         _seed(conn, cfg, dst, 300.0, "2026-08-23")
     spy = Spy()
     sent = notify.send(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"),
                        "2026-08-23", url="http://ha/hook", poster=spy,
                        log=lambda *_: None)
-    assert len(sent) == cfg.preferences["alerts"]["max_per_run"] == 5
+    assert len(sent) == 3
 
 
 def test_alerts_can_be_switched_off_without_touching_the_env(cfg, tmp_path):
@@ -389,6 +391,7 @@ def test_a_queued_alert_expires_rather_than_announcing_a_dead_price(cfg, tmp_pat
     """
     conn = dbm.init_db(tmp_path / "n.db")
     h = cfg.holiday("autumn-2026")
+    cfg.preferences["alerts"]["max_per_run"] = 5
     for dst in ("AGP", "BCN", "ALC", "PMI", "IBZ", "TIA", "MLA"):
         _seed(conn, cfg, dst, 300.0, "2026-08-23")
     assert notify.queue(cfg, conn, h, _items(cfg, conn, h, "2026-08-23"),

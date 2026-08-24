@@ -261,6 +261,12 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
     # pairs that actually came back per watch, and whether any query errored
     completed: dict[tuple, int] = {}
     failed: set[tuple] = set()
+    # Hit rate in order of completion, so a collapse PART WAY THROUGH is
+    # visible. A flat low rate means the dates are genuinely quiet; a rate
+    # that starts high and decays is Google throttling us for our own volume,
+    # and the answer to that is pacing, not a smaller grid.
+    decile: list[list[int]] = [[0, 0] for _ in range(10)]
+    seen = 0
 
     def _handle(task, offers, err):
         nonlocal used_discovery
@@ -272,6 +278,11 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
             failed.add(k)              # do not call this watch "asked"
             return
         completed[k] = completed.get(k, 0) + 1
+        nonlocal seen
+        bucket = decile[min(9, seen * 10 // max(1, len(tasks)))]
+        bucket[0] += 1
+        bucket[1] += 1 if offers else 0
+        seen += 1
         pair = task[1]
         # Record the outcome for THIS pair, found or not. An empty answer is
         # the only thing that can retire a remembered price for a source that
@@ -350,6 +361,10 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
     # re-queried by hand the next morning. So the judgement is made over the
     # night as a whole — if the hit rate collapses against recent nights, the
     # night's empties are noise and must not become tombstones.
+    if seen:
+        curve = " ".join(f"{(b[1]/b[0]*100):.0f}%" if b[0] else "-"
+                         for b in decile)
+        log(f"discovery hit rate by tenth of the run: {curve}")
     found_n, probe_n = dbm.probe_found_rate(conn, night)
     if probe_n:
         rate = found_n / probe_n
