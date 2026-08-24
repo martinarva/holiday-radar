@@ -125,9 +125,41 @@ def _carrier_name(source: str) -> str:
     return SOURCE_AIRLINE.get(source, source)
 
 
+class RateLimiter:
+    """Evenly space outgoing requests across every worker thread.
+
+    `pace_seconds` only ever delayed the single-threaded branch, so the real
+    six-worker runs went out at 6.8-7.6 requests per second — measured, not
+    estimated. A person browsing Google Flights makes about one query every
+    twenty seconds; at four hundred times that we were not going to stay
+    welcome, and the symptom was exactly what we saw: HTTP 200 with an empty
+    results page, no error to notice.
+
+    Spacing rather than a token bucket, deliberately. A bucket lets a burst
+    through after any quiet stretch, and a burst is the shape of traffic that
+    gets noticed.
+    """
+
+    def __init__(self, per_second: float):
+        self._gap = 1.0 / per_second if per_second and per_second > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def wait(self) -> None:
+        if not self._gap:
+            return
+        with self._lock:
+            due = max(time.monotonic(), self._next)
+            self._next = due + self._gap
+        delay = due - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+
+
 def run_nightly(cfg: Config, db_path, google_budget: int = 30,
                 audit_budget: int = 2, verify_budget: int = 5,
                 pairs_per_watch: int = 1, workers: int = 1,
+                max_rps: float | None = None,
                 log=print, sleep_s: float = 0.12, google_pace_s: float = 0.0,
                 google_search=None, collect=None,
                 rng: random.Random | None = None) -> dict:
@@ -254,8 +286,14 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
         f"({'full grid' if pairs_per_watch <= 0 else f'{pairs_per_watch}/watch'}), "
         f"{workers} workers")
 
+    # Tests inject a fake search and pass 0; only real runs pace themselves.
+    limiter = RateLimiter(float(
+        cfg.sampler.get("max_requests_per_second") or 0
+        if max_rps is None else max_rps))
+
     def _run(task):
         r, pair = task
+        limiter.wait()
         return task, google_search(r.origin, r.destination, pair[0], pair[1])
 
     # pairs that actually came back per watch, and whether any query errored

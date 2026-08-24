@@ -234,7 +234,8 @@ def cmd_nightly(cfg: Config, args) -> None:
         verify_budget=s["verify_budget"],
         pairs_per_watch=s.get("pairs_per_watch", 0),
         workers=s.get("workers", 6),
-        google_pace_s=s.get("pace_seconds", 0))
+        google_pace_s=s.get("pace_seconds", 0),
+        max_rps=s.get("max_requests_per_second"))
     print("\n=== NIGHTLY SUMMARY ===")
     for k, v in summary.items():
         print(f"  {k}: {v}")

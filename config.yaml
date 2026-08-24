@@ -165,3 +165,9 @@ sampler:
   # retiring fares. Google throttles by returning empty results pages rather
   # than errors, so nothing within one response can tell the two apart.
   min_found_rate_ratio: 0.5
+  # Ceiling on outgoing Google requests, shared across all workers.
+  # Measured 2026-08-23/24: six workers with no ceiling ran at 6.8-7.6 req/s
+  # and Google began answering with empty results pages. At 1/s the full
+  # 7382-pair grid takes about two hours — started at 02:45 it is done by
+  # 04:50, long before the 07:00 digest — so there is no reason to rush it.
+  max_requests_per_second: 1.0

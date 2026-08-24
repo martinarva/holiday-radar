@@ -122,7 +122,7 @@ def test_budgets_are_respected_and_separate(cfg, tmp_path):
     g = _fake_google()
     s = run_nightly(cfg, tmp_path / "r.db", google_budget=7, audit_budget=2,
                     verify_budget=0, collect=_fake_collect(cfg),
-                    google_search=g, sleep_s=0, log=lambda *_: None,
+                    google_search=g, sleep_s=0, max_rps=0, log=lambda *_: None,
                     rng=random.Random(7))
     assert s["discovery_used"] == 7
     assert s["audit_used"] == 2
@@ -139,7 +139,7 @@ def test_dormant_watches_consume_no_budget(cfg, tmp_path):
     run_nightly(cfg, tmp_path / "r.db", google_budget=30, audit_budget=0,
                 verify_budget=0, collect=_fake_collect(cfg, n_blind=3,
                                                        dormant=20),
-                google_search=g, sleep_s=0, log=lambda *_: None,
+                google_search=g, sleep_s=0, max_rps=0, log=lambda *_: None,
                 rng=random.Random(1))
     assert all(not dest.startswith("D") for _, dest, _, _ in g.calls)
     assert len(g.calls) == 3          # only the 3 blind watches
@@ -170,7 +170,7 @@ def test_provider_failure_does_not_abort_run(cfg, tmp_path):
                     verify_budget=0,
                     collect=_fake_collect(cfg, n_blind=5, n_covered=0,
                                           dormant=0),
-                    google_search=g, sleep_s=0, log=lambda *_: None,
+                    google_search=g, sleep_s=0, max_rps=0, log=lambda *_: None,
                     rng=random.Random(5))
     assert s["discovery_used"] == 5           # failures still spend budget
     assert s["discovery_priced"] == 3         # the 2 failures stored nothing
@@ -186,7 +186,7 @@ def test_rerun_same_night_creates_no_duplicates(cfg, tmp_path):
     for _ in range(2):
         run_nightly(cfg, dbfile, google_budget=4, audit_budget=1,
                     verify_budget=0, collect=collect,
-                    google_search=_fake_google(), sleep_s=0,
+                    google_search=_fake_google(), sleep_s=0, max_rps=0,
                     log=lambda *_: None, rng=random.Random(11))
     conn = dbm.init_db(dbfile)
     dupes = conn.execute("""
@@ -223,7 +223,7 @@ def test_expensive_candidates_are_not_verified(cfg, tmp_path):
     dbfile = tmp_path / "r.db"
     run_nightly(cfg, dbfile, google_budget=0, audit_budget=0, verify_budget=5,
                 collect=_fake_collect(cfg, n_blind=0, n_covered=2, dormant=0),
-                google_search=_fake_google(), sleep_s=0,
+                google_search=_fake_google(), sleep_s=0, max_rps=0,
                 log=lambda *_: None, rng=random.Random(4))
     conn = dbm.init_db(dbfile)
     assert conn.execute("SELECT COUNT(*) c FROM verifications").fetchone()["c"] == 0
@@ -233,7 +233,7 @@ def test_sampler_state_survives_and_advances(cfg, tmp_path):
     dbfile = tmp_path / "r.db"
     collect = _fake_collect(cfg, n_blind=2, n_covered=0, dormant=0)
     run_nightly(cfg, dbfile, google_budget=2, audit_budget=0, verify_budget=0,
-                collect=collect, google_search=_fake_google(), sleep_s=0,
+                collect=collect, google_search=_fake_google(), sleep_s=0, max_rps=0,
                 log=lambda *_: None, rng=random.Random(6))
     conn = dbm.init_db(dbfile)
     st = dbm.sampler_state_all(conn)
@@ -243,7 +243,7 @@ def test_sampler_state_survives_and_advances(cfg, tmp_path):
     conn.close()
     # second night advances the rotation instead of repeating the same pair
     run_nightly(cfg, dbfile, google_budget=2, audit_budget=0, verify_budget=0,
-                collect=collect, google_search=_fake_google(), sleep_s=0,
+                collect=collect, google_search=_fake_google(), sleep_s=0, max_rps=0,
                 log=lambda *_: None, rng=random.Random(6))
     conn = dbm.init_db(dbfile)
     assert all(s["rotation_idx"] == 2 for s in dbm.sampler_state_all(conn).values())
@@ -301,7 +301,7 @@ def test_pairs_per_watch_multiplies_queries_and_advances_rotation(cfg, tmp_path)
                     verify_budget=0, pairs_per_watch=3,
                     collect=_fake_collect(cfg, n_blind=4, n_covered=0,
                                           dormant=0),
-                    google_search=g, sleep_s=0, log=lambda *_: None,
+                    google_search=g, sleep_s=0, max_rps=0, log=lambda *_: None,
                     rng=random.Random(9))
     assert s["discovery_used"] == 12          # 4 watches x 3 pairs
     assert s["pairs_per_watch"] == 3
@@ -321,7 +321,7 @@ def test_budget_still_caps_multi_pair_sampling(cfg, tmp_path):
                     verify_budget=0, pairs_per_watch=3,
                     collect=_fake_collect(cfg, n_blind=10, n_covered=0,
                                           dormant=0),
-                    google_search=g, sleep_s=0, log=lambda *_: None,
+                    google_search=g, sleep_s=0, max_rps=0, log=lambda *_: None,
                     rng=random.Random(9))
     assert s["discovery_used"] == 7 and len(g.calls) == 7
 
@@ -370,7 +370,7 @@ def test_the_budget_cut_rewinds_rotation_to_what_actually_ran(cfg, tmp_path):
     g = _fake_google()
     run_nightly(cfg, conn_path, google_budget=1, audit_budget=0,
                 verify_budget=0, pairs_per_watch=3, workers=1,
-                log=lambda *_: None, google_search=g, sleep_s=0,
+                max_rps=0, log=lambda *_: None, google_search=g, sleep_s=0,
                 collect=_fake_collect(cfg, n_blind=4, n_covered=0, dormant=0),
                 rng=random.Random(1))
     conn = dbm.init_db(conn_path)
@@ -390,7 +390,7 @@ def test_a_failed_query_does_not_mark_a_watch_as_asked(cfg, tmp_path):
 
     run_nightly(cfg, conn_path, google_budget=2, audit_budget=0,
                 verify_budget=0, pairs_per_watch=1, workers=1,
-                log=lambda *_: None, google_search=boom, sleep_s=0,
+                max_rps=0, log=lambda *_: None, google_search=boom, sleep_s=0,
                 collect=_fake_collect(cfg, n_blind=2, n_covered=0, dormant=0),
                 rng=random.Random(1))
     conn = dbm.init_db(conn_path)
@@ -538,7 +538,7 @@ def test_an_empty_google_answer_leaves_a_tombstone(cfg, tmp_path):
 
     run_nightly(cfg, conn_path, google_budget=1, audit_budget=0,
                 verify_budget=0, pairs_per_watch=1, workers=1,
-                log=lambda *_: None, google_search=nothing, sleep_s=0,
+                max_rps=0, log=lambda *_: None, google_search=nothing, sleep_s=0,
                 collect=_fake_collect(cfg, n_blind=1, n_covered=0, dormant=0),
                 rng=random.Random(1))
     conn = dbm.init_db(conn_path)
@@ -553,7 +553,7 @@ def test_a_run_records_how_it_collected(cfg, tmp_path):
     conn_path = tmp_path / "m.db"
     run_nightly(cfg, conn_path, google_budget=1, audit_budget=0,
                 verify_budget=0, pairs_per_watch=2, workers=1,
-                log=lambda *_: None, google_search=_fake_google(), sleep_s=0,
+                max_rps=0, log=lambda *_: None, google_search=_fake_google(), sleep_s=0,
                 collect=_fake_collect(cfg, n_blind=1, n_covered=0, dormant=0),
                 rng=random.Random(1))
     conn = dbm.init_db(conn_path)
@@ -612,8 +612,46 @@ def test_a_normally_quiet_night_keeps_its_probes(cfg, tmp_path):
 
     run_nightly(cfg, conn_path, google_budget=4, audit_budget=0,
                 verify_budget=0, pairs_per_watch=1, workers=1,
-                log=lambda *_: None, google_search=_fake_google(), sleep_s=0,
+                max_rps=0, log=lambda *_: None, google_search=_fake_google(), sleep_s=0,
                 collect=_fake_collect(cfg, n_blind=4, n_covered=0, dormant=0),
                 rng=random.Random(1))
     conn = dbm.init_db(conn_path)
     assert conn.execute("SELECT COUNT(*) c FROM pair_probes_v2").fetchone()["c"] > 20
+
+
+def test_the_rate_limiter_spaces_requests_across_threads():
+    """pace_seconds only ever slowed the single-threaded branch.
+
+    The real six-worker runs went out at 6.8-7.6 req/s, which is what
+    provoked Google into answering with empty pages.
+    """
+    import threading as _th
+    import time as _time
+
+    from app.scheduler import RateLimiter
+
+    lim = RateLimiter(per_second=50)          # 20 ms apart
+    stamps, lock = [], _th.Lock()
+
+    def hit():
+        for _ in range(4):
+            lim.wait()
+            with lock:
+                stamps.append(_time.monotonic())
+
+    threads = [_th.Thread(target=hit) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert len(stamps) == 16
+    stamps.sort()
+    span = stamps[-1] - stamps[0]
+    assert span >= 15 * 0.02 * 0.8, f"16 requests must not bunch up: {span:.3f}s"
+    # and a limiter set to zero must not slow anything down
+    off = RateLimiter(per_second=0)
+    t0 = _time.monotonic()
+    for _ in range(100):
+        off.wait()
+    assert _time.monotonic() - t0 < 0.1
