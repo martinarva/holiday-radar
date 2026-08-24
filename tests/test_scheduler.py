@@ -559,3 +559,61 @@ def test_a_run_records_how_it_collected(cfg, tmp_path):
     conn = dbm.init_db(conn_path)
     modes = dbm.collection_modes(conn)
     assert list(modes.values()) == [2]
+
+
+def test_a_throttled_night_discards_its_own_empty_probes(cfg, tmp_path):
+    """Google answers 200 with an empty results page when it rate-limits.
+
+    Measured 2026-08-24: 6779 of 7382 probes empty, zero errors, and the
+    pairs answered normally by hand the next morning. Without this guard the
+    night's empties become tombstones and delete real fares.
+    """
+    conn_path = tmp_path / "th.db"
+    conn = dbm.init_db(conn_path)
+    # two healthy nights of history
+    for night in ("2026-08-21", "2026-08-22"):
+        for i in range(10):
+            dbm.record_pair_probe(conn, "autumn-2026", "TLL", f"B{i:02d}",
+                                  "2026-10-26", "2026-11-01",
+                                  "google_flights", night, found=True)
+    conn.close()
+
+    def nothing(*_a, **_k):
+        return []
+
+    summary = run_nightly(
+        cfg, conn_path, google_budget=4, audit_budget=0, verify_budget=0,
+        pairs_per_watch=1, workers=1, log=lambda *_: None,
+        google_search=nothing, sleep_s=0,
+        collect=_fake_collect(cfg, n_blind=4, n_covered=0, dormant=0),
+        rng=random.Random(1))
+
+    assert summary["probe_found_rate"] == 0.0
+    assert any("throttled" in e for e in summary.get("errors_list", [])) or \
+        summary["errors"] >= 1, "the night must be flagged, not silently trusted"
+    conn = dbm.init_db(conn_path)
+    left = conn.execute(
+        "SELECT COUNT(*) c FROM pair_probes_v2 WHERE probed_night=? AND found=0",
+        (summary["night"],)).fetchone()["c"]
+    assert left == 0, "a throttled night's empties must not survive as tombstones"
+
+
+def test_a_normally_quiet_night_keeps_its_probes(cfg, tmp_path):
+    """The guard must not eat legitimate sold-out evidence."""
+    conn_path = tmp_path / "ok.db"
+    conn = dbm.init_db(conn_path)
+    for night in ("2026-08-21", "2026-08-22"):
+        for i in range(10):
+            dbm.record_pair_probe(conn, "autumn-2026", "TLL", f"B{i:02d}",
+                                  "2026-10-26", "2026-11-01",
+                                  "google_flights", night,
+                                  found=(i < 3))        # a 30% hit rate is normal
+    conn.close()
+
+    run_nightly(cfg, conn_path, google_budget=4, audit_budget=0,
+                verify_budget=0, pairs_per_watch=1, workers=1,
+                log=lambda *_: None, google_search=_fake_google(), sleep_s=0,
+                collect=_fake_collect(cfg, n_blind=4, n_covered=0, dormant=0),
+                rng=random.Random(1))
+    conn = dbm.init_db(conn_path)
+    assert conn.execute("SELECT COUNT(*) c FROM pair_probes_v2").fetchone()["c"] > 20

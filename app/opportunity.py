@@ -60,6 +60,10 @@ def price_gate(effective: float, notify: float | None) -> float:
 # Marginal stays visible but ranks below comparable eligible options.
 CLIMATE_GATE = {"eligible": 1.0, "marginal": 0.85, "excluded": 0.35}
 
+# How many separate nights must come back empty before a remembered price is
+# retired. One is not enough: see the note in latest_priced_rows.
+EMPTIES_BEFORE_RETIRING = 2
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -301,10 +305,17 @@ def latest_priced_rows(conn, holiday_id: str, night: str | None,
         # as-of query, and a tombstone written on the 23rd said nothing about
         # what we knew on the 22nd. Any empty probe in (observed, night]
         # counts, so a pair that vanished and came back is handled too.
+        # TWO empty nights, not one. A rate-limited Google returns an empty
+        # results page that is byte-for-byte the shape of "nothing flies this
+        # pair" — proven live: five pairs that came back empty overnight all
+        # answered normally the next morning. One empty answer is therefore
+        # not evidence, and treating it as one let a throttled night delete
+        # perfectly good prices from the board.
         probed = gone.get((r["origin"], r["destination"], r["out_date"],
                            r["back_date"], r["source"])) or ()
-        if any(r["observed_night"] <= n <= night for n in probed):
-            continue        # asked again by then, found nothing: retire it
+        confirmed = [n for n in probed if r["observed_night"] <= n <= night]
+        if len(confirmed) >= EMPTIES_BEFORE_RETIRING:
+            continue        # asked repeatedly, found nothing: retire it
         if not row["_from_night"]:
             rows.append(row)
             continue

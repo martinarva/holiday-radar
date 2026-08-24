@@ -462,6 +462,38 @@ def collection_modes(conn: sqlite3.Connection) -> dict:
             for r in conn.execute("SELECT * FROM collection_mode")}
 
 
+def probe_found_rate(conn: sqlite3.Connection, night: str) -> tuple[int, int]:
+    """(found, total) sampler probes recorded for one night."""
+    r = conn.execute(
+        "SELECT SUM(found) f, COUNT(*) n FROM pair_probes_v2 WHERE probed_night=?",
+        (night,)).fetchone()
+    return int(r["f"] or 0), int(r["n"] or 0)
+
+
+def probe_found_rates(conn: sqlite3.Connection, before_night: str,
+                      limit: int = 7) -> list[float]:
+    """Found-rate per night before `before_night`, newest first."""
+    return [r["f"] / r["n"] for r in conn.execute(
+        "SELECT SUM(found) * 1.0 f, COUNT(*) n FROM pair_probes_v2 "
+        "WHERE probed_night < ? GROUP BY probed_night "
+        "ORDER BY probed_night DESC LIMIT ?", (before_night, limit))
+        if r["n"]]
+
+
+def discard_probes(conn: sqlite3.Connection, night: str) -> int:
+    """Throw away one night's empty probes.
+
+    Used when the night looks throttled rather than genuinely quiet. An
+    empty answer from a rate-limited Google is indistinguishable from "no
+    flights" in a single response — it carries the same results-page
+    furniture — so the judgement has to be made over the night as a whole.
+    """
+    n = conn.execute("DELETE FROM pair_probes_v2 WHERE probed_night=? AND found=0",
+                     (night,)).rowcount
+    conn.commit()
+    return n
+
+
 def run_migration(conn: sqlite3.Connection, name: str) -> None:
     """Re-run one migration by name, ignoring whether it is already applied.
 

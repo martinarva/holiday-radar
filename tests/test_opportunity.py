@@ -696,7 +696,14 @@ def test_a_tombstone_retires_a_price_a_ttl_would_still_carry(cfg, tmp_path):
     rows = opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=throttled)
     assert len(rows) == 1 and rows[0]["_from_night"] == "2026-07-29"
 
-    # now we asked again tonight and Google had nothing
+    # one empty answer is not evidence — it is what a rate-limited Google
+    # returns, and it looks exactly like "nothing flies this pair"
+    dbm.record_pair_probe(conn, h.id, "TLL", "AGP", out.isoformat(),
+                          back.isoformat(), "google_flights", "2026-08-22",
+                          found=False)
+    assert opp.latest_priced_rows(conn, h.id, "2026-08-22", cfg=throttled)
+
+    # a second empty night settles it
     dbm.record_pair_probe(conn, h.id, "TLL", "AGP", out.isoformat(),
                           back.isoformat(), "google_flights", "2026-08-23",
                           found=False)
@@ -714,12 +721,11 @@ def test_only_discovery_rows_inherit_the_rotations_patience(cfg):
 
 def test_a_tombstone_applies_to_the_night_it_was_written_and_no_earlier(cfg,
                                                                         tmp_path):
-    """Three edges the first version got wrong.
+    """Both time bounds, against the two-empty-nights rule.
 
-    A same-night rerun can price a pair and then find it gone — the "it's
-    tonight's data" shortcut ran before the tombstone check and kept the
-    vanished fare visible. And a tombstone must not reach backwards: written
-    on the 23rd, it said nothing about what we knew on the 22nd.
+    A tombstone must not reach backwards — `night` may be a historical as-of
+    query, and a probe written on the 24th says nothing about what the 22nd
+    knew — nor may probes that PREDATE the observation count against it.
     """
     conn = dbm.init_db(tmp_path / "o.db")
     h = cfg.holiday("autumn-2026")
@@ -731,22 +737,24 @@ def test_a_tombstone_applies_to_the_night_it_was_written_and_no_earlier(cfg,
             price_adult_eur=200.0, source="google_flights",
             estimated_family_eur=800.0, is_direct=True)], seats=4, night=night)
 
+    def empty(night):
+        dbm.record_pair_probe(conn, h.id, "TLL", "AGP", out.isoformat(),
+                              back.isoformat(), "google_flights", night, False)
+
     def visible(as_of):
         return bool(opp.latest_priced_rows(conn, h.id, as_of, cfg=cfg))
 
+    empty("2026-08-21")          # BEFORE we ever priced it: cannot count
     price("2026-08-22")
     assert visible("2026-08-22")
 
-    # same-night rerun finds nothing: the price must go, today or not
-    price("2026-08-23")
-    assert visible("2026-08-23")
-    dbm.record_pair_probe(conn, h.id, "TLL", "AGP", out.isoformat(),
-                          back.isoformat(), "google_flights", "2026-08-23",
-                          found=False)
-    assert not visible("2026-08-23"), "a same-night tombstone still counts"
+    empty("2026-08-23")
+    assert visible("2026-08-23"), "one empty night is not evidence"
 
-    # ...but the 22nd did not know that yet
+    empty("2026-08-24")
+    assert not visible("2026-08-24"), "two empty nights settle it"
     assert visible("2026-08-22"), "a tombstone must not rewrite the past"
+
 
 
 def test_a_probe_that_found_something_is_not_a_tombstone(cfg, tmp_path):
@@ -816,15 +824,17 @@ def test_a_probe_history_is_kept_per_night_not_overwritten(cfg, tmp_path):
 
     price("2026-08-21")
     probe("2026-08-22", found=False)        # gone
+    probe("2026-08-23", found=False)        # still gone: now it is evidence
     probe("2026-08-24", found=True)         # back
     price("2026-08-24")
 
     kept = dbm.empty_probes(conn, h.id)[
         ("TLL", "AGP", out.isoformat(), back.isoformat(), "google_flights")]
-    assert kept == ["2026-08-22"], "the empty night must survive a later hit"
+    assert kept == ["2026-08-22", "2026-08-23"], \
+        "both empty nights must survive a later hit"
 
-    # as of the 22nd it was gone...
-    assert opp.latest_priced_rows(conn, h.id, "2026-08-22", cfg=cfg) == []
+    # as of the 23rd it was gone...
+    assert opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg) == []
     # ...and by the 24th it is back, on its own fresh reading
     rows = opp.latest_priced_rows(conn, h.id, "2026-08-24", cfg=cfg)
     assert len(rows) == 1 and rows[0]["_from_night"] is None
@@ -877,3 +887,42 @@ def test_a_row_without_a_recorded_mode_falls_back_to_the_night(cfg, tmp_path):
     assert opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg) == []
     dbm.record_collection_mode(conn, "2026-07-29", pairs_per_watch=1)
     assert len(opp.latest_priced_rows(conn, h.id, "2026-08-23", cfg=cfg)) == 1
+
+
+def test_one_throttled_night_cannot_delete_a_price(cfg, tmp_path):
+    """Proven live on 2026-08-24: Google silently rate-limits.
+
+    Five pairs that came back empty overnight all answered normally the next
+    morning, and 6779 of 7382 probes were empty with zero errors — a
+    throttled results page is byte-for-byte the shape of "nothing flies this
+    pair". One empty answer must therefore never retire a fare.
+    """
+    conn = dbm.init_db(tmp_path / "o.db")
+    h = cfg.holiday("autumn-2026")
+    out, back = date(2026, 10, 26), date(2026, 11, 1)
+    dbm.upsert_observations(conn, h.id, [Observation(
+        origin="TLL", destination="AGP", out_date=out, back_date=back,
+        price_adult_eur=200.0, source="google_flights",
+        estimated_family_eur=800.0, is_direct=True)], seats=4,
+        night="2026-08-23")
+    dbm.record_pair_probe(conn, h.id, "TLL", "AGP", out.isoformat(),
+                          back.isoformat(), "google_flights", "2026-08-24",
+                          found=False)
+    assert opp.latest_priced_rows(conn, h.id, "2026-08-24", cfg=cfg), \
+        "a single throttled night must not wipe the board"
+
+
+def test_a_throttled_night_can_be_discarded_wholesale(tmp_path):
+    """When the found-rate collapses, the night's empties are not data."""
+    conn = dbm.init_db(tmp_path / "o.db")
+    for night, found in (("2026-08-22", True), ("2026-08-23", True),
+                         ("2026-08-24", False)):
+        for i in range(4):
+            dbm.record_pair_probe(conn, "autumn-2026", "TLL", f"D{i}",
+                                  "2026-10-26", "2026-11-01",
+                                  "google_flights", night, found)
+    assert dbm.probe_found_rate(conn, "2026-08-24") == (0, 4)
+    assert dbm.probe_found_rates(conn, "2026-08-24") == [1.0, 1.0]
+    assert dbm.discard_probes(conn, "2026-08-24") == 4
+    assert dbm.probe_found_rate(conn, "2026-08-24") == (0, 0)
+    assert dbm.probe_found_rate(conn, "2026-08-23") == (4, 4), "other nights intact"

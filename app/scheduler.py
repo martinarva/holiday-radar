@@ -31,6 +31,7 @@ from __future__ import annotations
 import concurrent.futures as cf
 import json
 import random
+import statistics
 import threading
 import time
 from datetime import date, datetime, timezone
@@ -341,6 +342,33 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
     log(f"discovery: {used_discovery} queries done, "
         f"{len(google_hits)} watches priced ({len(floor_due)} floor-due)")
 
+    # --- throttling guard ------------------------------------------------
+    # Google rate-limits silently: it answers 200 with a normal results page
+    # carrying zero itineraries, which is indistinguishable per response from
+    # "nothing flies this pair". Measured 2026-08-24: 6779 of 7382 probes
+    # empty, ZERO errors, and five of those pairs answered normally when
+    # re-queried by hand the next morning. So the judgement is made over the
+    # night as a whole — if the hit rate collapses against recent nights, the
+    # night's empties are noise and must not become tombstones.
+    found_n, probe_n = dbm.probe_found_rate(conn, night)
+    if probe_n:
+        rate = found_n / probe_n
+        history = dbm.probe_found_rates(conn, night)
+        median = statistics.median(history) if history else None
+        floor = float(cfg.sampler.get("min_found_rate_ratio", 0.5))
+        throttled = median is not None and len(history) >= 2 and \
+            rate < median * floor
+        if throttled:
+            dropped = dbm.discard_probes(conn, night)
+            msg = (f"discovery looks throttled: {rate:.1%} of pairs priced vs "
+                   f"a recent median of {median:.1%}; discarded {dropped} "
+                   f"empty probes rather than treat them as sold-out flights")
+            log(msg)
+            errors.append(msg)
+        else:
+            log(f"discovery hit rate {rate:.1%}"
+                + (f" (recent median {median:.1%})" if median else ""))
+
     # --- audit: separate small budget over carrier-covered watches ---
     covered = [r for r in relevant
                if r.coverage_class in ("covered_direct", "covered_1stop")]
@@ -505,6 +533,7 @@ def run_nightly(cfg: Config, db_path, google_budget: int = 30,
         "audit_used": used_audit, "audit_budget": audit_budget,
         "verify_rows": used_verify, "verify_pool": len(candidates),
         "alerts_queued": alerts_queued,
+        "probe_found_rate": (round(found_n / probe_n, 4) if probe_n else None),
         "errors": len(errors),
     }
     dbm.record_run(conn, "nightly", started, summary, errors=errors)
