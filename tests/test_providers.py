@@ -1,5 +1,7 @@
 from datetime import date, datetime, timezone
 
+import pytest
+
 from app.providers.base import Observation
 from app.providers.google_flights import CONSENT_MARKER, pick_consent_form
 from app.providers.ryanair import parse_round_trip_fares
@@ -147,3 +149,52 @@ def test_google_no_results_page_is_not_an_error():
     than a ProviderError (live: TLL-FUE on some date pairs)."""
     from app.providers.google_flights import RESULTS_PAGE_MARKER
     assert RESULTS_PAGE_MARKER == "include all taxes and fees"
+
+
+def test_wizz_rediscovers_its_api_version_after_a_404(monkeypatch):
+    """The scheduler runs for weeks; the version moves under it.
+
+    Discovery was dynamic but cached in a module global for the process
+    lifetime. When Wizz went 29.12.0 -> 29.14.0 every call 404'd from then
+    on and the carrier was silent for five nights with no error recorded.
+    """
+    from app.providers import wizzair
+    from app.providers.base import ProviderError
+
+    monkeypatch.setattr(wizzair, "_api_base", "https://be.wizzair.com/OLD/Api")
+    monkeypatch.setattr(wizzair, "_network", None)
+    seen = []
+
+    def fake_request(url, payload=None, timeout=25):
+        seen.append(url)
+        if url == wizzair.METADATA_URL:
+            return {"public": {"apiUrl": "https://be.wizzair.com/NEW/Api"}}
+        if "/OLD/" in url:
+            raise ProviderError("wizzair: HTTP Error 404: Not Found")
+        return {"outboundFlights": [], "returnFlights": []}
+
+    monkeypatch.setattr(wizzair, "_request", fake_request)
+    out = wizzair._versioned("/search/timetable", {"x": 1})
+
+    assert out == {"outboundFlights": [], "returnFlights": []}
+    assert any("/OLD/" in u for u in seen), "it must try the cached version first"
+    assert any("/NEW/" in u for u in seen), "then retry on the rediscovered one"
+    assert wizzair._network is None, "the versioned route map is invalidated too"
+
+
+def test_wizz_does_not_rediscover_on_a_non_404(monkeypatch):
+    """A timeout is not a version change; retrying the discovery hides it."""
+    from app.providers import wizzair
+    from app.providers.base import ProviderError
+
+    monkeypatch.setattr(wizzair, "_api_base", "https://be.wizzair.com/OLD/Api")
+    calls = []
+
+    def fake_request(url, payload=None, timeout=25):
+        calls.append(url)
+        raise ProviderError("wizzair: timed out")
+
+    monkeypatch.setattr(wizzair, "_request", fake_request)
+    with pytest.raises(ProviderError):
+        wizzair._versioned("/search/timetable", {})
+    assert len(calls) == 1, "one attempt, no version dance"

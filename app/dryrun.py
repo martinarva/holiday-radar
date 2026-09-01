@@ -181,7 +181,9 @@ def collect(cfg: Config, log=print, sleep_s: float = 0.12) -> dict:
         try:
             net = [r for r in wizzair.routes(o.code) if r["code"] in pool]
         except ProviderError as e:
-            log(f"wizzair network {o.code}: {e}")
+            msg = f"wizzair network {o.code}: {e}"
+            log(msg)
+            errors.append(msg)      # a dead provider must not read as 0 errors
             continue
         if net:
             log(f"wizzair {o.code}: {len(net)} pool routes "
@@ -194,7 +196,9 @@ def collect(cfg: Config, log=print, sleep_s: float = 0.12) -> dict:
                     if obs:
                         got[r["code"]] = obs[0]       # cheapest valid pair
                 except ProviderError as e:
-                    log(f"wizzair {o.code}-{r['code']}/{h.id}: {e}")
+                    msg = f"wizzair {o.code}-{r['code']}/{h.id}: {e}"
+                    log(msg)
+                    errors.append(msg)
                 time.sleep(sleep_s)
             wz_fares[(o.code, h.id)] = got
 

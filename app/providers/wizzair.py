@@ -62,8 +62,31 @@ def _request(url: str, payload: dict | None = None, timeout: int = 25):
         raise ProviderError(f"wizzair: {e}") from e
 
 
+def _versioned(path: str, payload: dict | None = None):
+    """Call a versioned endpoint, re-discovering the version on a 404.
+
+    Discovery was dynamic but the result was cached in a module global for
+    the lifetime of the process — and the scheduler runs for weeks. When Wizz
+    moved 29.12.0 -> 29.14.0 every call 404'd from then on and the carrier
+    went silent for five nights. The version is now re-resolved the first
+    time a call 404s, and the request retried once.
+    """
+    try:
+        return _request(f"{api_base()}{path}", payload)
+    except ProviderError as e:
+        if "404" not in str(e):
+            raise
+        global _network
+        before = api_base()
+        after = api_base(refresh=True)
+        if after == before:
+            raise
+        _network = None          # the map is versioned too
+        return _request(f"{after}{path}", payload)
+
+
 def api_base(refresh: bool = False) -> str:
-    """Current versioned API root, discovered once per process."""
+    """Current versioned API root, re-discovered whenever a call 404s."""
     global _api_base
     if _api_base and not refresh:
         return _api_base
@@ -83,7 +106,7 @@ def routes(airport: str) -> list[dict]:
     """
     global _network
     if _network is None:
-        _network = _request(f"{api_base()}/asset/map?languageCode=en-gb")
+        _network = _versioned("/asset/map?languageCode=en-gb")
     for city in _network.get("cities", []):
         if (city.get("iata") or "").upper() != airport.upper():
             continue
@@ -176,7 +199,7 @@ def timetable(origin: str, destination: str,
               return_window: tuple[date, date],
               adults: int = 1, children: int = 0) -> dict:
     """Raw per-day fares for both directions in one request."""
-    return _request(f"{api_base()}/search/timetable", {
+    return _versioned("/search/timetable", {
         "flightList": [
             {"departureStation": origin.upper(),
              "arrivalStation": destination.upper(),

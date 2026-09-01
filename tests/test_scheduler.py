@@ -655,3 +655,29 @@ def test_the_rate_limiter_spaces_requests_across_threads():
     for _ in range(100):
         off.wait()
     assert _time.monotonic() - t0 < 0.1
+
+
+def test_a_dead_provider_does_not_report_zero_errors(cfg, monkeypatch):
+    """Wizz 404'd for five nights and every run still said errors: 0.
+
+    Its failures were logged and nothing else, so the one number an operator
+    actually watches stayed clean while a whole carrier was gone.
+    """
+    from app import dryrun
+    from app.providers import airbaltic, ryanair, wizzair
+    from app.providers.base import ProviderError
+
+    # no network: the other carriers answer with nothing, Wizz is down
+    monkeypatch.setattr(airbaltic, "network", lambda *a, **k: {})
+    monkeypatch.setattr(airbaltic, "outbound_days", lambda *a, **k: {})
+    monkeypatch.setattr(airbaltic, "inbound_days", lambda *a, **k: {})
+    monkeypatch.setattr(ryanair, "for_holiday", lambda *a, **k: [])
+
+    def boom(*_a, **_k):
+        raise ProviderError("wizzair: HTTP Error 404: Not Found")
+
+    monkeypatch.setattr(wizzair, "routes", boom)
+    d = dryrun.collect(cfg, log=lambda *_: None, sleep_s=0)
+
+    assert any("wizzair" in e for e in d["errors"]), \
+        "a provider that is completely down must show up in the error list"
