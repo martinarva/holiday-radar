@@ -35,6 +35,8 @@ destinations:
   - {iata: CTA, name: "Catania (Sicily)", country: IT, lat: 37.47, lon: 15.07,  tier: short,  tags: [beach, city]}
   - {iata: PMO, name: "Palermo (Sicily)", country: IT, lat: 38.18, lon: 13.10,  tier: short,  tags: [beach, city]}
   - {iata: BGY, name: "Milan Bergamo",   country: IT, lat: 45.67,  lon: 9.70,   tier: short,  tags: [city], notes: "cheap LCC gateway, not warm off-season"}
+  - {iata: VCE, name: "Venice",          country: IT, lat: 45.51,  lon: 12.35,  tier: short,  tags: [city], notes: "Wizz flies it from TLL"}
+  - {iata: BUD, name: "Budapest",        country: HU, lat: 47.44,  lon: 19.26,  tier: short,  tags: [city], notes: "Wizz flies it from TLL"}
   # --- Greece ---
   - {iata: ATH, name: "Athens",          country: GR, lat: 37.94,  lon: 23.94,  tier: short,  tags: [city, beach]}
   - {iata: HER, name: "Heraklion (Crete)", country: GR, lat: 35.34, lon: 25.18, tier: short,  tags: [beach]}

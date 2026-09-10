@@ -105,9 +105,12 @@ climate_rules:
   # Warmth SATURATES rather than being capped: full marks at ideal_day_max_c
   # (~24 °C is plenty for a family), nothing extra above it. Heat never
   # excludes a destination — Bangkok at 35 °C is still a great trip, it just
-  # shouldn't outscore everywhere else on temperature alone. Only cold, rain
-  # or a missing sea can exclude. hot_penalty_from_c applies a mild nudge for
-  # genuinely extreme heat with young children.
+  # shouldn't outscore everywhere else on temperature alone. Neither does
+  # RAIN (owner 2026-09-10): max_rain_days now only costs score, because a
+  # rain-day normal is coarse and gating the watchlist on it meant the fare
+  # was never fetched at all. Only cold, or a missing sea for a beach rule,
+  # can exclude. hot_penalty_from_c applies a mild nudge for genuinely
+  # extreme heat with young children.
   beach:     {min_day_max_c: 23, ideal_day_max_c: 26, hot_penalty_from_c: 32, min_sea_c: 21, max_rain_days: 8, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
   warm_city: {min_day_max_c: 17, ideal_day_max_c: 24, hot_penalty_from_c: 30, max_rain_days: 9, tolerance_c: 2, tolerance_rain_days: 2, strict: false}
 

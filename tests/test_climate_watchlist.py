@@ -55,3 +55,33 @@ def test_warmth_saturates_and_heat_never_excludes():
     assert hot >= 9.0                          # ...but stays a strong option
     assert classify(rule, 18.0, 5.0, None)[1] < ideal   # cooler discriminates
     assert classify(rule, 12.0, 5.0, None)[0] == EXCLUDED  # cold still excludes
+
+
+def test_rain_costs_score_but_never_excludes():
+    """Owner, 2026-09-10 — the same call already made for heat.
+
+    Rome in October is 23.1 C with 11.3 rain days against a 9+2 limit: 0.3
+    of a day decided whether the destination was priced at all. 41
+    destination-months were being dropped on rain alone while warm enough.
+    """
+    from app import climate as cl
+    from app.config import load_config
+
+    cfg = load_config(ROOT / "config.yaml")
+    warm_city = cfg.climate_rules["warm_city"]
+
+    dry = cl.classify(warm_city, 23.1, 4.0, None)
+    rome_october = cl.classify(warm_city, 23.1, 11.3, None)
+    monsoon = cl.classify(warm_city, 23.1, 25.0, None)
+
+    assert dry[0] == cl.ELIGIBLE
+    assert rome_october[0] == cl.ELIGIBLE, "rain must not gate the watchlist"
+    assert monsoon[0] == cl.ELIGIBLE
+    # ...but it is still felt, and monotonically
+    assert dry[1] > rome_october[1] > monsoon[1]
+
+    # cold still excludes, which is the point of the screen
+    assert cl.classify(warm_city, 8.0, 0.0, None)[0] == cl.EXCLUDED
+    # and a beach rule with no sea still excludes
+    beach = cfg.climate_rules["beach"]
+    assert cl.classify(beach, 27.0, 0.0, None)[0] == cl.EXCLUDED

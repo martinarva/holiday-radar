@@ -129,10 +129,17 @@ def classify(rule: ClimateRule, t_max: float | None, rain_days: float | None,
     else:
         ds = 0.0
 
-    if dt == 0 and dr == 0 and ds == 0:
+    # Rain SCORES but never excludes (owner, 2026-09-10), the same call
+    # already made for heat. A rain-day normal is a coarse thing — an October
+    # shower in Rome counts the same as a washout — and letting it gate the
+    # WATCHLIST meant the destination was never priced at all, so the ranking
+    # never got to weigh it. Measured at the time: 41 destination-months were
+    # dropped on rain alone while warm enough, Rome in October among them at
+    # 11.3 days against a 9+2 limit — 0.3 of a day deciding whether we ever
+    # saw the fare. Only cold, or a missing sea for a beach rule, excludes.
+    if dt == 0 and ds == 0:
         status = ELIGIBLE
-    elif (dt <= rule.tolerance_c and ds <= rule.tolerance_c
-          and dr <= rule.tolerance_rain_days):
+    elif dt <= rule.tolerance_c and ds <= rule.tolerance_c:
         status = EXCLUDED if rule.strict else MARGINAL
     else:
         status = EXCLUDED
